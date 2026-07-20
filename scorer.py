@@ -22,11 +22,12 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 from groq import AsyncGroq
 
-from models import (
+from .models import (
     EvaluationRequest, WebhookPayload, RubricScores, InlineError,
     Grade, RubricLevel, PassFail,
 )
@@ -150,11 +151,14 @@ class Scorer:
 
         except Exception as exc:
             logger.error("Scoring failed for eval_id=%s: %s", request.eval_id, exc)
-        return WebhookPayload(
-            event="evaluation.completed",
-            eval_id=request.eval_id,
-            status="scored",
+            return WebhookPayload(
+                event="evaluation.failed",
+                eval_id=request.eval_id,
+                candidate_id=getattr(request, "candidate_id", None),
+                status="failed",
+                completed_at=datetime.now(timezone.utc),
                 error=str(exc),
+                metadata=getattr(request, "metadata", {}) or {},
             )
 
     # ------------------------------------------------------------------
@@ -318,8 +322,11 @@ Svar KUN med dette JSON-objekt:
         )
 
         return WebhookPayload(
+            event="evaluation.completed",
             eval_id=request.eval_id,
+            candidate_id=getattr(request, "candidate_id", None),
             status="scored",
+            completed_at=datetime.now(timezone.utc),
             rubrik=RubricScores(
                 pragmatisk=rubric_raw["pragmatisk"],
                 diskursiv=rubric_raw["diskursiv"],
@@ -330,4 +337,5 @@ Svar KUN med dette JSON-objekt:
             feedback_da=feedback,
             errors=validated_errors,
             word_count=word_count,
+            metadata=getattr(request, "metadata", {}) or {},
         )
