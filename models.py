@@ -187,7 +187,8 @@ class EvaluationStatusResponse(BaseModel):
     completed_at: datetime | None = None
     result: WebhookPayload | None = None
     error: str | None = None
-
+# Backward-compatible alias
+EvaluationRecord = EvaluationStatusResponse
 
 # ---------------------------------------------------------------------------
 # Health endpoint
