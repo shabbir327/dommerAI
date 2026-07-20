@@ -29,10 +29,12 @@ from groq import AsyncGroq
 
 from models import (
     EvaluationRequest,
-    AckResponse,
     WebhookPayload,
-    HealthResponse,
-    EvaluationStatusResponse,
+    RubricScores,
+    InlineError,
+    Grade,
+    RubricLevel,
+    PassFail,
 )
 
 logger = logging.getLogger("dommer.scorer")
@@ -327,9 +329,12 @@ Svar KUN med dette JSON-objekt:
         return WebhookPayload(
             event="evaluation.completed",
             eval_id=request.eval_id,
-            candidate_id=getattr(request, "candidate_id", None),
+            candidate_id=request.candidate_id,
             status="scored",
+            submitted_at=request.submitted_at,
             completed_at=datetime.now(timezone.utc),
+            metadata=request.metadata,
+            webhook_url=request.webhook_url,
             rubrik=RubricScores(
                 pragmatisk=rubric_raw["pragmatisk"],
                 diskursiv=rubric_raw["diskursiv"],
@@ -340,5 +345,6 @@ Svar KUN med dette JSON-objekt:
             feedback_da=feedback,
             errors=validated_errors,
             word_count=word_count,
-            metadata=getattr(request, "metadata", {}) or {},
+            model_name=GROQ_MODEL,
+            prompt_version="v1",
         )
