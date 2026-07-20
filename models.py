@@ -9,7 +9,7 @@ Async flow:
 """
 
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Optional, Literal
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
