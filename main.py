@@ -28,6 +28,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("dommer.api")
 
+# Temporary in-memory evaluation store.
+# This will later be replaced by PostgreSQL.
+evaluations: dict[str, EvaluationStatusResponse] = {}
 scorer: Scorer | None = None
 results_store: dict[str, EvaluationStatusResponse] = {}
 
