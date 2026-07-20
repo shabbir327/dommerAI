@@ -137,23 +137,40 @@ async def health() -> HealthResponse:
     return HealthResponse(status="ok", scorer_ready=scorer is not None)
 
 
-@app.post("/evaluate", response_model=AckResponse, status_code=202, tags=["Evaluation"])
+@app.post(
+    "/evaluate",
+    response_model=AckResponse,
+    status_code=202,
+    tags=["Scoring"],
+)
 async def evaluate(
     request: EvaluationRequest,
     background_tasks: BackgroundTasks,
     _: str = Depends(require_api_key),
 ) -> AckResponse:
-    existing = results_store.get(request.eval_id)
-    if existing:
-        raise HTTPException(status_code=409, detail="eval_id already exists.")
+    if request.eval_id in evaluations:
+        raise HTTPException(
+            status_code=409,
+            detail="eval_id already exists",
+        )
 
-    results_store[request.eval_id] = EvaluationStatusResponse(
+    evaluations[request.eval_id] = EvaluationStatusResponse(
         eval_id=request.eval_id,
         status="pending",
+        candidate_id=request.candidate_id,
+        exam_type=request.exam_type,
+        submitted_at=request.submitted_at,
+        metadata=request.metadata,
+        webhook_url=request.webhook_url,
     )
-    background_tasks.add_task(score_and_notify, request)
-    return AckResponse(eval_id=request.eval_id)
 
+    background_tasks.add_task(score_and_notify, request)
+
+    return AckResponse(
+        eval_id=request.eval_id,
+        status="pending",
+        submitted_at=request.submitted_at,
+    )
 
 @app.get(
     "/evaluations/{eval_id}",
