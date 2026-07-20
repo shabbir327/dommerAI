@@ -150,9 +150,10 @@ class Scorer:
 
         except Exception as exc:
             logger.error("Scoring failed for eval_id=%s: %s", request.eval_id, exc)
-            return WebhookPayload(
-                eval_id=request.eval_id,
-                status="failed",
+        return WebhookPayload(
+            event="evaluation.completed",
+            eval_id=request.eval_id,
+            status="scored",
                 error=str(exc),
             )
 
