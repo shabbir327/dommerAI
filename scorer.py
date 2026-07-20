@@ -27,9 +27,12 @@ from typing import Optional
 
 from groq import AsyncGroq
 
-from .models import (
-    EvaluationRequest, WebhookPayload, RubricScores, InlineError,
-    Grade, RubricLevel, PassFail,
+from models import (
+    EvaluationRequest,
+    AckResponse,
+    WebhookPayload,
+    HealthResponse,
+    EvaluationStatusResponse,
 )
 
 logger = logging.getLogger("dommer.scorer")
