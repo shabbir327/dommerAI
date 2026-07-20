@@ -95,44 +95,43 @@ async def deliver_webhook(
 
 
 async def score_and_notify(request: EvaluationRequest) -> None:
+    record = evaluations.get(request.eval_id)
+    if record is None:
+        logger.error(
+            "Evaluation disappeared before processing - eval_id=%s",
+            request.eval_id,
+        )
+        return
+
+    started_at = datetime.now(timezone.utc)
+
+    record.status = "processing"
+    record.started_at = started_at
+
     assert scorer is not None
+    payload = await scorer.score(request)
 
-    try:
-        scored = await scorer.score(request)
-        payload = WebhookPayload(
-            event="evaluation.completed" if scored.status == "scored" else "evaluation.failed",
-            eval_id=request.eval_id,
-            candidate_id=request.candidate_id,
-            status=scored.status,
-            completed_at=datetime.now(timezone.utc),
-            rubrik=scored.rubrik,
-            overall=scored.overall,
-            pass_fail=scored.pass_fail,
-            feedback_da=scored.feedback_da,
-            errors=scored.errors or [],
-            word_count=scored.word_count,
-            error=scored.error,
-            metadata=request.metadata,
-        )
-    except Exception as exc:
-        logger.exception("Unhandled scoring error for eval_id=%s", request.eval_id)
-        payload = WebhookPayload(
-            event="evaluation.failed",
-            eval_id=request.eval_id,
-            candidate_id=request.candidate_id,
-            status="failed",
-            completed_at=datetime.now(timezone.utc),
-            error="Evaluation failed.",
-            metadata=request.metadata,
-        )
-
-    results_store[request.eval_id] = EvaluationStatusResponse(
+    evaluations[request.eval_id] = EvaluationStatusResponse(
         eval_id=request.eval_id,
         status=payload.status,
+        candidate_id=request.candidate_id,
+        exam_type=request.exam_type,
+        submitted_at=request.submitted_at,
+        started_at=started_at,
+        completed_at=payload.completed_at,
+        metadata=request.metadata,
+        webhook_url=request.webhook_url,
         result=payload,
+        error=payload.error,
     )
 
-    await deliver_webhook(str(request.webhook_url), payload)
+    destination = (
+        str(request.webhook_url)
+        if request.webhook_url
+        else DEFAULT_WEBHOOK_URL
+    )
+
+    await _fire_webhook(payload, destination)
 
 
 @app.get("/health", response_model=HealthResponse, tags=["System"])
