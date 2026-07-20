@@ -180,15 +180,23 @@ class WebhookPayload(BaseModel):
 # ---------------------------------------------------------------------------
 
 class EvaluationStatusResponse(BaseModel):
+    """Stable polling response retained for backward compatibility."""
+
     eval_id: str
-    candidate_id: str | None = None
     status: SubmissionStatus
-    submitted_at: datetime
-    completed_at: datetime | None = None
-    result: WebhookPayload | None = None
-    error: str | None = None
-# Backward-compatible alias
-EvaluationRecord = EvaluationStatusResponse
+    candidate_id: Optional[str] = None
+    exam_type: Optional[ExamLevel] = None
+
+    submitted_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    webhook_url: Optional[HttpUrl] = None
+    result: Optional[WebhookPayload] = None
+    error: Optional[str] = None
 
 # ---------------------------------------------------------------------------
 # Health endpoint
