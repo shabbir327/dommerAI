@@ -179,13 +179,14 @@ class WebhookPayload(BaseModel):
 # Stored evaluation response
 # ---------------------------------------------------------------------------
 
-class EvaluationRecord(BaseModel):
+class EvaluationStatusResponse(BaseModel):
     eval_id: str
     candidate_id: str | None = None
     status: SubmissionStatus
     submitted_at: datetime
     completed_at: datetime | None = None
     result: WebhookPayload | None = None
+    error: str | None = None
 
 
 # ---------------------------------------------------------------------------
