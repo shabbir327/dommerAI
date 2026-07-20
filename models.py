@@ -55,8 +55,11 @@ class InlineError(BaseModel):
 
 class WebhookPayload(BaseModel):
     event: Literal["evaluation.completed", "evaluation.failed"]
+    completed_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+
     eval_id: str
-    candidate_id: Optional[str] = None
     status: SubmissionStatus
     completed_at: datetime
     rubrik: Optional[RubricScores] = None
