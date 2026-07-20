@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dommer — Test Viewer</title>
+<style>
+  :root {
+    --navy: #1e3a5f; --navy-light: #2a4f82;
+    --amber: #d97706; --green: #065f46; --green-light: #d1fae5;
+    --red: #991b1b; --red-light: #fee2e2;
+    --border: #e2e8f0; --bg: #f8fafc; --card: #fff;
+    --text: #0f172a; --muted: #64748b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.6; }
+
+  .header { background: var(--navy); color: white; padding: 0 28px; height: 52px; display: flex; align-items: center; justify-content: space-between; }
+  .header-brand { font-weight: 700; font-size: 15px; }
+  .header-brand span { color: #93c5fd; }
+  .header-note { font-size: 12px; opacity: 0.6; background: rgba(255,255,255,0.1); padding: 3px 10px; border-radius: 20px; }
+
+  .layout { display: grid; grid-template-columns: 1fr 380px; gap: 0; min-height: calc(100vh - 52px); }
+
+  /* ── Left: Input panel ── */
+  .input-panel { padding: 24px; border-right: 1px solid var(--border); overflow-y: auto; }
+  .input-panel h2 { font-size: 14px; font-weight: 700; margin-bottom: 16px; color: var(--navy); text-transform: uppercase; letter-spacing: 0.6px; }
+
+  .field-group { margin-bottom: 16px; }
+  .field-group label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  select, input[type="text"] { width: 100%; padding: 8px 12px; border: 1.5px solid var(--border); border-radius: 7px; font-size: 13px; font-family: inherit; background: white; }
+  select:focus, input:focus { outline: none; border-color: var(--navy); }
+  textarea.essay-input { width: 100%; min-height: 220px; padding: 12px; border: 1.5px solid var(--border); border-radius: 7px; font-size: 13px; font-family: Georgia, serif; line-height: 1.8; resize: vertical; }
+  textarea.essay-input:focus { outline: none; border-color: var(--navy); }
+
+  .prompt-box { background: #fffbeb; border-left: 3px solid var(--amber); padding: 10px 12px; border-radius: 0 6px 6px 0; font-size: 12px; line-height: 1.7; color: #334155; margin-bottom: 16px; white-space: pre-wrap; }
+
+  .wc-bar { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .wc-ok { color: var(--green); font-weight: 600; }
+  .wc-warn { color: var(--amber); font-weight: 600; }
+
+  .btn-score { width: 100%; padding: 11px; background: var(--navy); color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 700; cursor: pointer; margin-top: 16px; transition: background 0.15s; }
+  .btn-score:hover { background: var(--navy-light); }
+  .btn-score:disabled { background: #94a3b8; cursor: not-allowed; }
+
+  .api-config { background: #f1f5f9; border-radius: 8px; padding: 12px; margin-bottom: 16px; }
+  .api-config label { font-size: 11px; font-weight: 600; color: var(--muted); display: block; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .api-config input { font-size: 12px; font-family: monospace; }
+
+  /* ── Right: Results panel ── */
+  .results-panel { padding: 24px; overflow-y: auto; background: var(--card); }
+  .results-panel h2 { font-size: 14px; font-weight: 700; margin-bottom: 16px; color: var(--navy); text-transform: uppercase; letter-spacing: 0.6px; }
+
+  .placeholder { text-align: center; padding: 60px 20px; color: var(--muted); }
+  .placeholder .icon { font-size: 40px; margin-bottom: 12px; }
+  .placeholder p { font-size: 13px; line-height: 1.6; }
+
+  /* Grade card */
+  .grade-card { border-radius: 10px; padding: 16px 20px; margin-bottom: 16px; text-align: center; color: white; }
+  .grade-card.pass { background: var(--green); }
+  .grade-card.fail { background: var(--red); }
+  .grade-num { font-size: 48px; font-weight: 900; line-height: 1; }
+  .grade-label { font-size: 13px; opacity: 0.85; margin-top: 4px; }
+
+  /* Rubric */
+  .rubric-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px; }
+  .rubric-item { border: 1px solid var(--border); border-radius: 8px; padding: 10px; text-align: center; }
+  .rubric-item .dim-name { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); margin-bottom: 4px; }
+  .rubric-item .dim-level { font-size: 14px; font-weight: 700; }
+  .level-top   { color: #065f46; }
+  .level-midt  { color: #1e3a5f; }
+  .level-bund  { color: #92400e; }
+  .level-under { color: #991b1b; }
+
+  /* Feedback */
+  .feedback-box { background: #f0f7ff; border-left: 3px solid var(--navy); padding: 12px 14px; border-radius: 0 8px 8px 0; font-size: 13px; line-height: 1.7; margin-bottom: 16px; }
+  .section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); margin-bottom: 8px; }
+
+  /* Essay with highlights */
+  .essay-display { font-family: Georgia, serif; font-size: 14px; line-height: 2; white-space: pre-wrap; word-break: break-word; }
+  .essay-display .err-highlight {
+    position: relative;
+    cursor: help;
+    border-bottom: 2px solid;
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+  .err-spelling     { background: #fef2f2; border-color: #f87171; color: #991b1b; }
+  .err-morphology   { background: #fef3c7; border-color: #f59e0b; color: #78350f; }
+  .err-inversion    { background: #ede9fe; border-color: #a78bfa; color: #4c1d95; }
+  .err-syntax       { background: #ffe4e6; border-color: #fb7185; color: #881337; }
+  .err-agreement    { background: #fef3c7; border-color: #f59e0b; color: #78350f; }
+  .err-punctuation  { background: #f0fdf4; border-color: #4ade80; color: #14532d; }
+  .err-word_choice  { background: #e0f2fe; border-color: #38bdf8; color: #0c4a6e; }
+  .err-missing_word { background: #fdf4ff; border-color: #c084fc; color: #581c87; }
+  .err-other        { background: #f1f5f9; border-color: #94a3b8; color: #334155; }
+
+  /* Tooltip */
+  .tooltip {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: #0f172a;
+    color: white;
+    border-radius: 8px;
+    padding: 10px 12px;
+    width: 240px;
+    font-family: system-ui, sans-serif;
+    font-size: 12px;
+    line-height: 1.5;
+    z-index: 100;
+    pointer-events: none;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  }
+  .tooltip::after {
+    content: "";
+    position: absolute;
+    top: 100%; left: 50%;
+    transform: translateX(-50%);
+    border: 6px solid transparent;
+    border-top-color: #0f172a;
+  }
+  .tooltip .tt-correction { color: #86efac; font-weight: 700; margin-bottom: 4px; }
+  .tooltip .tt-type { color: #94a3b8; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+  .tooltip .tt-da { margin-bottom: 3px; }
+  .tooltip .tt-en { color: #94a3b8; font-style: italic; }
+  .err-highlight:hover .tooltip { display: block; }
+
+  /* Error legend */
+  .legend { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+  .legend-item { display: flex; align-items: center; gap: 4px; font-size: 11px; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+  /* Error list */
+  .error-count { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .error-item { border: 1px solid var(--border); border-radius: 7px; padding: 10px 12px; margin-bottom: 8px; font-size: 12px; }
+  .error-item .err-original { font-family: Georgia, serif; color: var(--red); text-decoration: line-through; margin-bottom: 2px; }
+  .error-item .err-correction { font-family: Georgia, serif; color: var(--green); font-weight: 600; margin-bottom: 4px; }
+  .error-item .err-expl { color: var(--muted); line-height: 1.5; }
+  .type-badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 4px; }
+
+  /* Loading */
+  .spinner { width: 28px; height: 28px; border: 3px solid #e2e8f0; border-top-color: var(--navy); border-radius: 50%; animation: spin 0.7s linear infinite; margin: 0 auto 12px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-state { text-align: center; padding: 40px 20px; color: var(--muted); }
+
+  .tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 16px; gap: 0; }
+  .tab { padding: 8px 16px; font-size: 12px; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; color: var(--muted); transition: all 0.15s; }
+  .tab.active { color: var(--navy); border-bottom-color: var(--navy); }
+
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-brand">Dommer <span>·</span> Test Viewer</div>
+  <div class="header-note">Development only — not for candidates</div>
+</div>
+
+<div class="layout">
+
+  <!-- ══ LEFT: Input ══ -->
+  <div class="input-panel">
+    <h2>Submit Essay</h2>
+
+    <div class="api-config">
+      <label>Dommer API URL</label>
+      <input type="text" id="api-url" value="http://localhost:8000/evaluate">
+      <label style="margin-top:8px">API Key</label>
+      <input type="text" id="api-key" value="dev-key-change-in-prod">
+      <label style="margin-top:8px">Mock Result URL</label>
+      <input type="text" id="mock-url" value="http://localhost:8001" placeholder="https://your-mock-tunnel.ngrok-free.app">
+    </div>
+
+    <div class="field-group">
+      <label>Exam Level</label>
+      <select id="exam-type" onchange="updatePrompt()">
+        <option value="PD2">PD2 (B1)</option>
+        <option value="PD3">PD3 (B2)</option>
+      </select>
+    </div>
+
+    <div class="field-group">
+      <label>Prompt</label>
+      <select id="prompt-select" onchange="loadPrompt()">
+        <option value="pd2_klage">PD2 — Klageemail (beskadiget vare)</option>
+        <option value="pd2_job">PD2 — Jobansøgning</option>
+        <option value="pd2_nabo">PD2 — Email til nabo</option>
+        <option value="pd3_arbejdstid">PD3 — Arbejdstid</option>
+        <option value="pd3_klima">PD3 — Klimaansvar</option>
+        <option value="custom">Custom prompt...</option>
+      </select>
+    </div>
+
+    <div class="field-group">
+      <label>Task / Question</label>
+      <div class="prompt-box" id="prompt-display"></div>
+      <textarea id="question-input" style="display:none;min-height:80px;" class="essay-input" placeholder="Enter custom question..."></textarea>
+    </div>
+
+    <div class="field-group">
+      <label>Candidate Essay</label>
+      <textarea class="essay-input" id="essay-input" oninput="updateWC()"
+        placeholder="Paste or type the candidate's essay here..."></textarea>
+      <div class="wc-bar">
+        <span id="wc-display">0 words</span>
+        <span id="wc-min"></span>
+      </div>
+    </div>
+
+    <button class="btn-score" id="score-btn" onclick="scoreEssay()">
+      Score Essay →
+    </button>
+  </div>
+
+  <!-- ══ RIGHT: Results ══ -->
+  <div class="results-panel">
+    <h2>Results</h2>
+
+    <div id="results-placeholder" class="placeholder">
+      <div class="icon">📝</div>
+      <p>Submit an essay on the left to see<br>rubric scores and inline error analysis.</p>
+    </div>
+
+    <div id="results-content" style="display:none">
+
+      <!-- Grade -->
+      <div class="grade-card" id="grade-card">
+        <div class="grade-num" id="grade-num"></div>
+        <div class="grade-label" id="grade-label"></div>
+      </div>
+
+      <!-- Rubric -->
+      <div class="section-label">Rubric Scores</div>
+      <div class="rubric-grid">
+        <div class="rubric-item">
+          <div class="dim-name">Pragmatisk</div>
+          <div class="dim-level" id="dim-pragmatisk"></div>
+        </div>
+        <div class="rubric-item">
+          <div class="dim-name">Diskursiv</div>
+          <div class="dim-level" id="dim-diskursiv"></div>
+        </div>
+        <div class="rubric-item">
+          <div class="dim-name">Lingvistisk</div>
+          <div class="dim-level" id="dim-lingvistisk"></div>
+        </div>
+      </div>
+
+      <!-- Feedback -->
+      <div class="section-label">Feedback (Danish)</div>
+      <div class="feedback-box" id="feedback-box"></div>
+
+      <!-- Tabs: Highlighted essay / Error list -->
+      <div class="tabs">
+        <div class="tab active" onclick="switchTab('essay')">Highlighted Essay</div>
+        <div class="tab" onclick="switchTab('errors')">Error List</div>
+      </div>
+
+      <!-- Tab: Essay with highlights -->
+      <div class="tab-content active" id="tab-essay">
+        <div class="legend" id="error-legend"></div>
+        <div class="essay-display" id="essay-highlighted"></div>
+      </div>
+
+      <!-- Tab: Error list -->
+      <div class="tab-content" id="tab-errors">
+        <div class="error-count" id="error-count"></div>
+        <div id="error-list"></div>
+      </div>
+
+    </div>
+
+    <div id="results-loading" style="display:none" class="loading-state">
+      <div class="spinner"></div>
+      <div style="font-weight:600;margin-bottom:4px">Scoring essay...</div>
+      <div style="font-size:12px">Running rubric + error analysis concurrently</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ══════════════════════════════════════════════
+// PROMPTS
+// ══════════════════════════════════════════════
+const PROMPTS = {
+  pd2_klage: {
+    level: "PD2", min: 100,
+    question: "Du har købt en jakke online, men den er ankommet med en skade. Skriv en email til butikken.\n\nDu skal:\n• Forklare hvad problemet er\n• Fortælle hvornår du modtog jakken\n• Sige hvad du ønsker butikken gør",
+  },
+  pd2_job: {
+    level: "PD2", min: 100,
+    question: "Du har set et stillingsopslag som butiksassistent. Skriv en jobansøgning.\n\nDu skal:\n• Præsentere dig selv\n• Forklare hvorfor du søger jobbet\n• Beskrive dine relevante erfaringer",
+  },
+  pd2_nabo: {
+    level: "PD2", min: 100,
+    question: "Din nabo spiller høj musik sent om aftenen. Skriv en email til naboen.\n\nDu skal:\n• Forklare problemet høfligt\n• Fortælle hvordan støjen påvirker dig\n• Foreslå en løsning",
+  },
+  pd3_arbejdstid: {
+    level: "PD3", min: 200,
+    question: "Diskuter fordele og ulemper ved lange arbejdsuger i Danmark, og giv din vurdering af, om danskerne arbejder for meget.\n\nSkriv mindst 200 ord. Ca. halvdelen skal indeholde din vurdering.",
+  },
+  pd3_klima: {
+    level: "PD3", min: 200,
+    question: "Hvem bærer det største ansvar for at bekæmpe klimaforandringer — borgerne, politikerne eller virksomhederne?\n\nDiskuter og giv din vurdering. Skriv mindst 200 ord.",
+  },
+};
+
+let currentMinWords = 100;
+
+function loadPrompt() {
+  const key = document.getElementById("prompt-select").value;
+  const qBox = document.getElementById("question-input");
+  const qDisplay = document.getElementById("prompt-display");
+
+  if (key === "custom") {
+    qDisplay.style.display = "none";
+    qBox.style.display = "block";
+    currentMinWords = 100;
+  } else {
+    const p = PROMPTS[key];
+    qDisplay.style.display = "block";
+    qDisplay.textContent = p.question;
+    qBox.style.display = "none";
+    currentMinWords = p.min;
+    document.getElementById("exam-type").value = p.level;
+  }
+  document.getElementById("wc-min").textContent = `Min. ${currentMinWords} words`;
+  updateWC();
+}
+
+function updatePrompt() { loadPrompt(); }
+
+function updateWC() {
+  const text  = document.getElementById("essay-input").value.trim();
+  const count = text ? text.split(/\s+/).length : 0;
+  const el    = document.getElementById("wc-display");
+  el.textContent = `${count} words`;
+  el.className   = count >= currentMinWords ? "wc-ok" : count > currentMinWords * 0.7 ? "wc-warn" : "";
+}
+
+// ══════════════════════════════════════════════
+// SCORING
+// ══════════════════════════════════════════════
+async function scoreEssay() {
+  const apiUrl  = document.getElementById("api-url").value.trim();
+  const apiKey  = document.getElementById("api-key").value.trim();
+  const examType = document.getElementById("exam-type").value;
+  const promptKey = document.getElementById("prompt-select").value;
+  const question = promptKey === "custom"
+    ? document.getElementById("question-input").value.trim()
+    : PROMPTS[promptKey].question;
+  const essay = document.getElementById("essay-input").value.trim();
+
+  if (!essay) { alert("Paste an essay first."); return; }
+  if (!question) { alert("Enter a question."); return; }
+
+  const btn = document.getElementById("score-btn");
+  btn.disabled = true;
+  btn.textContent = "Scoring...";
+  document.getElementById("results-placeholder").style.display = "none";
+  document.getElementById("results-content").style.display     = "none";
+  document.getElementById("results-loading").style.display     = "block";
+
+  const evalId = "test-" + Date.now().toString(36);
+
+  try {
+    const res = await fetch(apiUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-Key": apiKey,
+        "ngrok-skip-browser-warning": "true"
+      },
+      body: JSON.stringify({
+        eval_id:    evalId,
+        exam_type:  examType,
+        question:   question,
+        answer:     essay,
+      }),
+    });
+
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+
+    // Dommer returns 202 pending — poll the mock webhook or show inline
+    // For test purposes: if synchronous test mode, parse directly
+    const ack = await res.json();
+
+    // Poll mock backend for result
+    await pollForResult(evalId, essay);
+
+  } catch(e) {
+    showError(e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Score Essay →";
+  }
+}
+
+async function pollForResult(evalId, essay) {
+  // Poll the public mock backend URL. Browser localhost points to the user's PC, not Colab.
+  const mockBase = document.getElementById("mock-url").value.trim().replace(/\/$/, "");
+  if (!mockBase) throw new Error("Enter the public Mock Result URL from the notebook.");
+  const mockUrl = mockBase + "/results/" + encodeURIComponent(evalId);
+  for (let i = 0; i < 20; i++) {
+    await new Promise(r => setTimeout(r, 1000));
+    try {
+      const r = await fetch(mockUrl,{
+        headers:{
+          "ngrok-skip-browser-warning":"true"
+        }
+      });
+      const data = await r.json();
+      if (data.status === "scored") {
+        renderResults(data, essay);
+        return;
+      }
+      if (data.status === "failed") {
+        showError(data.error || "Scoring failed");
+        return;
+      }
+    } catch(e) {}
+  }
+  showError("Timeout — no result after 20 seconds. Is Dommer running?");
+}
+
+// ══════════════════════════════════════════════
+// RENDER RESULTS
+// ══════════════════════════════════════════════
+const GRADE_LABELS = { 12: "Fremragende", 10: "Fortrinlig", 7: "God", 4: "Jævn", 2: "Tilstrækkelig", 0: "Utilstrækkelig", "-3": "Ringe" };
+const LEVEL_CLASS  = { "Top": "level-top", "Midt": "level-midt", "Bund": "level-bund", "Under niveau": "level-under" };
+
+const ERROR_COLORS = {
+  spelling:     { bg: "#fef2f2", border: "#f87171", label: "Spelling" },
+  morphology:   { bg: "#fef3c7", border: "#f59e0b", label: "Morphology" },
+  inversion:    { bg: "#ede9fe", border: "#a78bfa", label: "Inversion" },
+  syntax:       { bg: "#ffe4e6", border: "#fb7185", label: "Syntax" },
+  agreement:    { bg: "#fef3c7", border: "#f59e0b", label: "Agreement" },
+  punctuation:  { bg: "#f0fdf4", border: "#4ade80", label: "Punctuation" },
+  word_choice:  { bg: "#e0f2fe", border: "#38bdf8", label: "Word choice" },
+  missing_word: { bg: "#fdf4ff", border: "#c084fc", label: "Missing word" },
+  other:        { bg: "#f1f5f9", border: "#94a3b8", label: "Other" },
+};
+
+function renderResults(data, essay) {
+  document.getElementById("results-loading").style.display = "none";
+  document.getElementById("results-content").style.display = "block";
+
+  // Grade card
+  const isPass = data.pass_fail === "PASSED";
+  const gc = document.getElementById("grade-card");
+  gc.className = "grade-card " + (isPass ? "pass" : "fail");
+  document.getElementById("grade-num").textContent   = data.overall;
+  document.getElementById("grade-label").textContent =
+    (GRADE_LABELS[data.overall] || "") + " · " + (data.word_count || 0) + " ord · " + (isPass ? "✓ Bestået" : "✗ Ikke bestået");
+
+  // Rubric
+  const r = data.rubrik || {};
+  ["pragmatisk", "diskursiv", "lingvistisk"].forEach(dim => {
+    const el = document.getElementById("dim-" + dim);
+    el.textContent = r[dim] || "—";
+    el.className = "dim-level " + (LEVEL_CLASS[r[dim]] || "");
+  });
+
+  // Feedback
+  document.getElementById("feedback-box").textContent = data.feedback_da || "—";
+
+  // Errors
+  const errors = data.errors || [];
+  renderHighlightedEssay(essay, errors);
+  renderErrorList(errors);
+
+  switchTab("essay");
+}
+
+function renderHighlightedEssay(essay, errors) {
+  if (!errors.length) {
+    document.getElementById("essay-highlighted").textContent = essay;
+    document.getElementById("error-legend").innerHTML = '<span style="font-size:12px;color:var(--muted)">No errors flagged.</span>';
+    return;
+  }
+
+  // Build legend for types present
+  const typesPresent = [...new Set(errors.map(e => e.type))];
+  document.getElementById("error-legend").innerHTML = typesPresent.map(t => {
+    const c = ERROR_COLORS[t] || ERROR_COLORS.other;
+    return `<div class="legend-item">
+      <div class="legend-dot" style="background:${c.border}"></div>
+      <span>${c.label}</span>
+    </div>`;
+  }).join("");
+
+  // Build highlighted HTML — replace each error span in order
+  // Sort errors by their position in text to avoid overlap
+  let positions = [];
+  errors.forEach(err => {
+    let searchFrom = 0;
+    let idx;
+    while ((idx = essay.indexOf(err.original, searchFrom)) !== -1) {
+      positions.push({ start: idx, end: idx + err.original.length, err });
+      searchFrom = idx + 1;
+      break; // only first occurrence
+    }
+  });
+
+  // Sort by start position, filter overlaps
+  positions.sort((a, b) => a.start - b.start);
+  const filtered = [];
+  let lastEnd = 0;
+  for (const p of positions) {
+    if (p.start >= lastEnd) {
+      filtered.push(p);
+      lastEnd = p.end;
+    }
+  }
+
+  // Build HTML
+  let html = "";
+  let cursor = 0;
+  for (const p of filtered) {
+    // Text before this error
+    html += escHtml(essay.slice(cursor, p.start));
+    // Error span with tooltip
+    const c = ERROR_COLORS[p.err.type] || ERROR_COLORS.other;
+    html += `<span class="err-highlight err-${p.err.type}" style="background:${c.bg};border-color:${c.border}">` +
+      escHtml(p.err.original) +
+      `<span class="tooltip">` +
+        `<div class="tt-type">${c.label}</div>` +
+        `<div class="tt-correction">→ ${escHtml(p.err.correction)}</div>` +
+        `<div class="tt-da">${escHtml(p.err.explanation_da)}</div>` +
+        `<div class="tt-en">${escHtml(p.err.explanation_en)}</div>` +
+      `</span>` +
+    `</span>`;
+    cursor = p.end;
+  }
+  html += escHtml(essay.slice(cursor));
+
+  document.getElementById("essay-highlighted").innerHTML = html;
+}
+
+function renderErrorList(errors) {
+  document.getElementById("error-count").textContent =
+    errors.length === 0 ? "No errors flagged." :
+    `${errors.length} error${errors.length > 1 ? "s" : ""} flagged`;
+
+  document.getElementById("error-list").innerHTML = errors.map(e => {
+    const c = ERROR_COLORS[e.type] || ERROR_COLORS.other;
+    return `<div class="error-item">
+      <div class="type-badge" style="background:${c.bg};color:${c.border}">${c.label}</div>
+      <div class="err-original">${escHtml(e.original)}</div>
+      <div class="err-correction">${escHtml(e.correction)}</div>
+      <div class="err-expl">🇩🇰 ${escHtml(e.explanation_da)}<br>🇬🇧 ${escHtml(e.explanation_en)}</div>
+    </div>`;
+  }).join("");
+}
+
+function showError(msg) {
+  document.getElementById("results-loading").style.display = "none";
+  document.getElementById("results-placeholder").style.display = "block";
+  document.getElementById("results-placeholder").innerHTML =
+    `<div class="icon">⚠️</div><p style="color:#991b1b"><strong>Error:</strong><br>${escHtml(msg)}</p>`;
+}
+
+function switchTab(tab) {
+  document.querySelectorAll(".tab").forEach((t, i) => {
+    t.classList.toggle("active", (i === 0) === (tab === "essay"));
+  });
+  document.getElementById("tab-essay").classList.toggle("active", tab === "essay");
+  document.getElementById("tab-errors").classList.toggle("active", tab === "errors");
+}
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// Init
+loadPrompt();
+</script>
+</body>
+</html>
