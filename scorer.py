@@ -20,21 +20,14 @@ Model swap: replace _call_groq() with _call_ollama() after fine-tuning.
 import asyncio
 import json
 import logging
-import os
-import time
-from datetime import datetime, timezone
 from typing import Optional
 
 from groq import AsyncGroq
 
+from config import settings
 from models import (
-    EvaluationRequest,
-    WebhookPayload,
-    RubricScores,
-    InlineError,
-    Grade,
-    RubricLevel,
-    PassFail,
+    EvaluationRequest, WebhookPayload, RubricScores, InlineError,
+    Grade, RubricLevel, PassFail,
 )
 
 logger = logging.getLogger("dommer.scorer")
@@ -43,7 +36,7 @@ logger = logging.getLogger("dommer.scorer")
 # Config
 # ---------------------------------------------------------------------------
 
-GROQ_MODEL  = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL  = settings.groq_model
 TEMPERATURE = 0.05
 MAX_RETRIES = 3
 RETRY_DELAY = 1.5
@@ -122,6 +115,13 @@ Error type definitions:
                  (e.g. "blive" vs "være", formal/informal register)
 - missing_word:  A grammatically required word is absent
 - other:         Does not fit any category above
+
+IMPORTANT ERROR RULES:
+- Only mark a phrase when it is clearly incorrect in standard Danish.
+- Do not treat a valid alternative phrasing as an error.
+- Accept idiomatic phrases such as "På forhånd tak", "Med venlig hilsen",
+  "Jeg vil gerne bede om" and "Jeg ser frem til at høre fra jer".
+- If uncertain whether something is a real error, omit it.
 """
 
 
@@ -131,10 +131,9 @@ Error type definitions:
 
 class Scorer:
     def __init__(self):
-        api_key = os.environ.get("GROQ_API_KEY")
-        if not api_key:
+        if not settings.groq_api_key:
             raise RuntimeError("GROQ_API_KEY environment variable is not set.")
-        self.client = AsyncGroq(api_key=api_key)
+        self.client = AsyncGroq(api_key=settings.groq_api_key)
         logger.info("Dommer scorer ready — model=%s", GROQ_MODEL)
 
     async def score(self, request: EvaluationRequest) -> WebhookPayload:
@@ -159,11 +158,13 @@ class Scorer:
             return WebhookPayload(
                 event="evaluation.failed",
                 eval_id=request.eval_id,
-                candidate_id=getattr(request, "candidate_id", None),
                 status="failed",
-                completed_at=datetime.now(timezone.utc),
+                candidate_id=request.candidate_id,
+                submitted_at=request.submitted_at,
+                metadata=request.metadata,
+                webhook_url=request.webhook_url,
+                model_name=GROQ_MODEL,
                 error=str(exc),
-                metadata=getattr(request, "metadata", {}) or {},
             )
 
     # ------------------------------------------------------------------
@@ -329,12 +330,12 @@ Svar KUN med dette JSON-objekt:
         return WebhookPayload(
             event="evaluation.completed",
             eval_id=request.eval_id,
-            candidate_id=request.candidate_id,
             status="scored",
+            candidate_id=request.candidate_id,
             submitted_at=request.submitted_at,
-            completed_at=datetime.now(timezone.utc),
             metadata=request.metadata,
             webhook_url=request.webhook_url,
+            model_name=GROQ_MODEL,
             rubrik=RubricScores(
                 pragmatisk=rubric_raw["pragmatisk"],
                 diskursiv=rubric_raw["diskursiv"],
@@ -345,6 +346,4 @@ Svar KUN med dette JSON-objekt:
             feedback_da=feedback,
             errors=validated_errors,
             word_count=word_count,
-            model_name=GROQ_MODEL,
-            prompt_version="v1",
         )
