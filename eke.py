@@ -8,10 +8,7 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Any
 
-try:
-    from .knowledge_repository import KnowledgeRecord, KnowledgeRepository
-except ImportError:  # Supports `uvicorn main:app` from a flat Render repository.
-    from knowledge_repository import KnowledgeRecord, KnowledgeRepository
+from knowledge_repository import KnowledgeRecord, KnowledgeRepository
 
 STOPWORDS = {
     "og", "i", "på", "af", "til", "for", "med", "en", "et", "den", "det",

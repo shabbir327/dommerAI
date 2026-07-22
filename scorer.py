@@ -12,28 +12,16 @@ from typing import Any, Optional
 
 from groq import AsyncGroq
 
-try:
-    from .eke import ExaminerKnowledgeEngine
-    from .models import (
-        EvaluationRequest,
-        Grade,
-        InlineError,
-        KnowledgeCitation,
-        RubricScores,
-        WebhookPayload,
-        WritingStatistics,
-    )
-except ImportError:  # Supports `uvicorn main:app` from a flat Render repository.
-    from eke import ExaminerKnowledgeEngine
-    from models import (
-        EvaluationRequest,
-        Grade,
-        InlineError,
-        KnowledgeCitation,
-        RubricScores,
-        WebhookPayload,
-        WritingStatistics,
-    )
+from eke import ExaminerKnowledgeEngine
+from models import (
+    EvaluationRequest,
+    Grade,
+    InlineError,
+    KnowledgeCitation,
+    RubricScores,
+    WebhookPayload,
+    WritingStatistics,
+)
 
 logger = logging.getLogger("dommer.scorer")
 
