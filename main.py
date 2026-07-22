@@ -10,22 +10,16 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
 
-try:
-    from .eke import ExaminerKnowledgeEngine
-    from .knowledge_repository import KnowledgeRepository
-    from .models import AckResponse, EvaluationRequest, HealthResponse, WebhookPayload
-    from .scorer import Scorer
-except ImportError:  # Supports Render start command: uvicorn main:app
-    from eke import ExaminerKnowledgeEngine
-    from knowledge_repository import KnowledgeRepository
-    from models import AckResponse, EvaluationRequest, HealthResponse, WebhookPayload
-    from scorer import Scorer
+from .eke import ExaminerKnowledgeEngine
+from .knowledge_repository import KnowledgeRepository
+from .models import AckResponse, EvaluationRequest, HealthResponse, WebhookPayload
+from .scorer import Scorer
 
 API_KEY = os.environ.get("DOMMER_API_KEY", "dev-key-change-in-prod")
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://danskprove.com/webhook")
 
 logging.basicConfig(
-    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
 )
 logger = logging.getLogger("dommer.api")
@@ -41,30 +35,19 @@ async def lifespan(app: FastAPI):
     repository.refresh(force=True)
     eke = ExaminerKnowledgeEngine(repository)
     scorer = Scorer(eke)
-    logger.info(
-        "Dommer ready — knowledge=%s webhook=%s",
-        repository.counts(),
-        WEBHOOK_URL,
-    )
+    logger.info("Dommer ready — knowledge=%s webhook=%s", repository.counts(), WEBHOOK_URL)
     yield
 
 
 app = FastAPI(
     title="Dommer — DanskProeve Writing Evaluator",
-    description="Knowledge-grounded PD2/PD3 evaluator with exact inline grammar locations.",
-    version="1.3.0",
+    description="Knowledge-grounded AI scoring engine for PD2/PD3 writing.",
+    version="1.1.0",
     lifespan=lifespan,
 )
-
-cors_origins = [
-    origin.strip()
-    for origin in os.environ.get("CORS_ORIGINS", "*").split(",")
-    if origin.strip()
-]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
-    allow_credentials=False,
+    allow_origins=[origin.strip() for origin in os.environ.get("CORS_ORIGINS", "*").split(",")],
     allow_methods=["POST", "GET"],
     allow_headers=["*"],
 )
@@ -72,8 +55,8 @@ app.add_middleware(
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
-async def require_api_key(key: str | None = Security(api_key_header)) -> str:
-    if not key or key != API_KEY:
+async def require_api_key(key: str = Security(api_key_header)) -> str:
+    if key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing API key.")
     return key
 
@@ -87,24 +70,15 @@ async def score_and_notify(request: EvaluationRequest) -> None:
 
 
 async def _fire_webhook(payload: WebhookPayload, retries: int = 3) -> None:
-    async with httpx.AsyncClient(timeout=20) as client:
+    async with httpx.AsyncClient(timeout=15) as client:
         for attempt in range(1, retries + 1):
             try:
-                response = await client.post(
-                    WEBHOOK_URL,
-                    json=payload.model_dump(mode="json", exclude_none=True),
-                )
+                response = await client.post(WEBHOOK_URL, json=payload.model_dump())
                 response.raise_for_status()
                 logger.info("Webhook delivered — eval_id=%s", payload.eval_id)
                 return
             except Exception as exc:
-                logger.warning(
-                    "Webhook attempt %d/%d failed — eval_id=%s error=%s",
-                    attempt,
-                    retries,
-                    payload.eval_id,
-                    exc,
-                )
+                logger.warning("Webhook attempt %d failed: %s", attempt, exc)
                 if attempt < retries:
                     await asyncio.sleep(2 ** attempt)
     logger.error("Webhook failed — eval_id=%s", payload.eval_id)
@@ -113,13 +87,11 @@ async def _fire_webhook(payload: WebhookPayload, retries: int = 3) -> None:
 @app.get("/health", response_model=HealthResponse, tags=["System"])
 async def health() -> HealthResponse:
     counts = repository.counts() if repository else {}
-    sources = repository.source_status() if repository else {}
     return HealthResponse(
         status="ok",
         scorer_ready=scorer is not None,
         knowledge_ready=counts.get("dommer", 0) > 0,
         knowledge_counts=counts,
-        knowledge_sources=sources,
     )
 
 
