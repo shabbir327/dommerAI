@@ -1,232 +1,125 @@
-"""DommerAI v1.0 FastAPI application."""
-
-from __future__ import annotations
+"""FastAPI entrypoint for the DommerAI writing evaluator."""
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
-from typing import Any
 
 import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
 
-from config import settings
-from database import (
-    check_database,
-    close_database,
-    complete_evaluation,
-    create_evaluation,
-    evaluation_exists,
-    get_evaluation_record,
-    mark_processing,
-)
-from models import (
-    AckResponse,
-    EvaluationRequest,
-    EvaluationStatusResponse,
-    HealthResponse,
-    WebhookPayload,
-)
-from scorer import Scorer
+try:
+    from .eke import ExaminerKnowledgeEngine
+    from .knowledge_repository import KnowledgeRepository
+    from .models import AckResponse, EvaluationRequest, HealthResponse, WebhookPayload
+    from .scorer import Scorer
+except ImportError:  # Supports Render start command: uvicorn main:app
+    from eke import ExaminerKnowledgeEngine
+    from knowledge_repository import KnowledgeRepository
+    from models import AckResponse, EvaluationRequest, HealthResponse, WebhookPayload
+    from scorer import Scorer
+
+API_KEY = os.environ.get("DOMMER_API_KEY", "dev-key-change-in-prod")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://danskprove.com/webhook")
 
 logging.basicConfig(
-    level=getattr(logging, settings.log_level.upper(), logging.INFO),
-    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
 )
 logger = logging.getLogger("dommer.api")
 
 scorer: Scorer | None = None
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+repository: KnowledgeRepository | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global scorer
-
-    settings.validate()
-    logger.info("Starting %s v%s", settings.app_name, settings.app_version)
-
-    await check_database()
-    logger.info("PostgreSQL connection successful")
-
-    scorer = Scorer()
-    logger.info("Scorer loaded with model=%s", settings.groq_model)
-
+    global scorer, repository
+    repository = KnowledgeRepository()
+    repository.refresh(force=True)
+    eke = ExaminerKnowledgeEngine(repository)
+    scorer = Scorer(eke)
+    logger.info(
+        "Dommer ready — knowledge=%s webhook=%s",
+        repository.counts(),
+        WEBHOOK_URL,
+    )
     yield
-
-    await close_database()
-    logger.info("DommerAI shut down")
 
 
 app = FastAPI(
-    title="DommerAI - DanskProeve Writing Evaluator",
-    description="Production API for asynchronous PD2/PD3 Danish writing evaluation.",
-    version=settings.app_version,
+    title="Dommer — DanskProeve Writing Evaluator",
+    description="Knowledge-grounded PD2/PD3 evaluator with exact inline grammar locations.",
+    version="1.3.0",
     lifespan=lifespan,
 )
+
+cors_origins = [
+    origin.strip()
+    for origin in os.environ.get("CORS_ORIGINS", "*").split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["GET", "POST"],
+    allow_origins=cors_origins,
+    allow_credentials=False,
+    allow_methods=["POST", "GET"],
     allow_headers=["*"],
 )
 
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
 
 async def require_api_key(key: str | None = Security(api_key_header)) -> str:
-    if key != settings.dommer_api_key:
+    if not key or key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing API key.")
     return key
 
 
-async def fire_webhook(
-    payload: WebhookPayload,
-    destination: str | None,
-) -> bool:
-    if not destination:
-        logger.info("No webhook configured - eval_id=%s", payload.eval_id)
-        return False
+async def score_and_notify(request: EvaluationRequest) -> None:
+    if scorer is None:
+        logger.error("Scorer not initialised — eval_id=%s", request.eval_id)
+        return
+    payload = await scorer.score(request)
+    await _fire_webhook(payload)
 
-    body = payload.model_dump(mode="json")
-    async with httpx.AsyncClient(timeout=settings.webhook_timeout_seconds) as client:
-        for attempt in range(1, settings.webhook_retries + 1):
+
+async def _fire_webhook(payload: WebhookPayload, retries: int = 3) -> None:
+    async with httpx.AsyncClient(timeout=20) as client:
+        for attempt in range(1, retries + 1):
             try:
-                response = await client.post(destination, json=body)
-                response.raise_for_status()
-                logger.info(
-                    "Webhook delivered - eval_id=%s status=%d",
-                    payload.eval_id,
-                    response.status_code,
+                response = await client.post(
+                    WEBHOOK_URL,
+                    json=payload.model_dump(mode="json", exclude_none=True),
                 )
-                return True
+                response.raise_for_status()
+                logger.info("Webhook delivered — eval_id=%s", payload.eval_id)
+                return
             except Exception as exc:
                 logger.warning(
-                    "Webhook attempt %d failed - eval_id=%s error=%s",
+                    "Webhook attempt %d/%d failed — eval_id=%s error=%s",
                     attempt,
+                    retries,
                     payload.eval_id,
                     exc,
                 )
-                if attempt < settings.webhook_retries:
+                if attempt < retries:
                     await asyncio.sleep(2 ** attempt)
-
-    logger.error("Webhook delivery failed - eval_id=%s", payload.eval_id)
-    return False
-
-
-async def score_and_notify(request: EvaluationRequest) -> None:
-    started_at = datetime.now(timezone.utc)
-
-    try:
-        await mark_processing(request.eval_id, started_at)
-
-        if scorer is None:
-            raise RuntimeError("Scorer is not initialized.")
-
-        payload = await scorer.score(request)
-
-        await complete_evaluation(
-            eval_id=request.eval_id,
-            status=payload.status,
-            completed_at=payload.completed_at,
-            rubric=(
-                payload.rubrik.model_dump(mode="json")
-                if payload.rubrik is not None
-                else None
-            ),
-            overall=payload.overall,
-            pass_fail=payload.pass_fail,
-            feedback_da=payload.feedback_da,
-            errors=[item.model_dump(mode="json") for item in payload.errors],
-            word_count=payload.word_count,
-            model_name=payload.model_name,
-            prompt_version=payload.prompt_version,
-            error=payload.error,
-        )
-
-        destination = (
-            str(request.webhook_url)
-            if request.webhook_url is not None
-            else settings.default_webhook_url
-        )
-        await fire_webhook(payload, destination)
-
-    except Exception as exc:
-        logger.exception("Background evaluation failed - eval_id=%s", request.eval_id)
-        await complete_evaluation(
-            eval_id=request.eval_id,
-            status="failed",
-            completed_at=datetime.now(timezone.utc),
-            rubric=None,
-            overall=None,
-            pass_fail=None,
-            feedback_da=None,
-            errors=[],
-            word_count=None,
-            model_name=settings.groq_model,
-            prompt_version="v1",
-            error=str(exc),
-        )
-
-
-def build_status_response(row: dict[str, Any]) -> EvaluationStatusResponse:
-    result: WebhookPayload | None = None
-
-    if row["status"] in {"scored", "failed"}:
-        result = WebhookPayload(
-            event=(
-                "evaluation.completed"
-                if row["status"] == "scored"
-                else "evaluation.failed"
-            ),
-            eval_id=row["eval_id"],
-            candidate_id=row["candidate_id"],
-            status=row["status"],
-            submitted_at=row["submitted_at"],
-            completed_at=row["completed_at"],
-            metadata=row["metadata"] or {},
-            webhook_url=row["webhook_url"],
-            rubrik=row["rubric"],
-            overall=row["overall"],
-            pass_fail=row["pass_fail"],
-            feedback_da=row["feedback_da"],
-            errors=row["errors"] or [],
-            word_count=row["word_count"],
-            model_name=row["model_name"],
-            prompt_version=row["prompt_version"] or "v1",
-            error=row["error"],
-        )
-
-    return EvaluationStatusResponse(
-        eval_id=row["eval_id"],
-        status=row["status"],
-        candidate_id=row["candidate_id"],
-        exam_type=row["exam_type"],
-        submitted_at=row["submitted_at"],
-        started_at=row["started_at"],
-        completed_at=row["completed_at"],
-        metadata=row["metadata"] or {},
-        webhook_url=row["webhook_url"],
-        result=result,
-        error=row["error"],
-    )
+    logger.error("Webhook failed — eval_id=%s", payload.eval_id)
 
 
 @app.get("/health", response_model=HealthResponse, tags=["System"])
 async def health() -> HealthResponse:
-    database_ready = True
-    try:
-        await check_database()
-    except Exception:
-        database_ready = False
-        logger.exception("Health database check failed")
-
-    ready = scorer is not None and database_ready
+    counts = repository.counts() if repository else {}
+    sources = repository.source_status() if repository else {}
     return HealthResponse(
-        status="ok" if ready else "degraded",
+        status="ok",
         scorer_ready=scorer is not None,
-        database_ready=database_ready,
+        knowledge_ready=counts.get("dommer", 0) > 0,
+        knowledge_counts=counts,
+        knowledge_sources=sources,
     )
 
 
@@ -236,44 +129,7 @@ async def evaluate(
     background_tasks: BackgroundTasks,
     _: str = Depends(require_api_key),
 ) -> AckResponse:
-    if await evaluation_exists(request.eval_id):
-        raise HTTPException(status_code=409, detail="eval_id already exists")
-
-    try:
-        await create_evaluation(
-            eval_id=request.eval_id,
-            candidate_id=request.candidate_id,
-            exam_type=request.exam_type,
-            question=request.question,
-            question_description=request.question_description,
-            answer=request.answer,
-            submitted_at=request.submitted_at,
-            metadata=request.metadata,
-            webhook_url=str(request.webhook_url) if request.webhook_url else None,
-        )
-    except Exception as exc:
-        logger.exception("Could not create evaluation - eval_id=%s", request.eval_id)
-        raise HTTPException(status_code=503, detail="Evaluation could not be stored.") from exc
-
+    if scorer is None:
+        raise HTTPException(status_code=503, detail="Scorer is not ready.")
     background_tasks.add_task(score_and_notify, request)
-
-    return AckResponse(
-        eval_id=request.eval_id,
-        status="pending",
-        submitted_at=request.submitted_at,
-    )
-
-
-@app.get(
-    "/evaluations/{eval_id}",
-    response_model=EvaluationStatusResponse,
-    tags=["Scoring"],
-)
-async def get_evaluation(
-    eval_id: str,
-    _: str = Depends(require_api_key),
-) -> EvaluationStatusResponse:
-    row = await get_evaluation_record(eval_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="Evaluation not found")
-    return build_status_response(row)
+    return AckResponse(eval_id=request.eval_id, status="pending")
