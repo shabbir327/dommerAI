@@ -45,6 +45,7 @@ async def evaluate(
         "eval_id": request.eval_id,
         "status": "pending",
         "submission": {
+            "candidate_id": request.candidate_id or request.eval_id,
             "exam_type": request.exam_type,
             "question": request.question,
             "question_description": request.question_description,

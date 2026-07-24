@@ -27,8 +27,8 @@ PERSIST_EVALUATIONS=true
 This project contains COR / ordregister.dk resources in the `language` schema. Configure:
 
 ```text
-SUPABASE_URL_COR=https://<grammar-project-ref>.supabase.co
-SUPABASE_KEY_COR=<grammar-service-role-key>
+GRAMMAR_SUPABASE_URL=https://<grammar-project-ref>.supabase.co
+GRAMMAR_SUPABASE_SERVICE_ROLE_KEY=<grammar-service-role-key>
 ```
 
 ## Existing settings
@@ -57,7 +57,18 @@ uvicorn main:app --host 0.0.0.0 --port $PORT
 
 The public evaluation contract is unchanged: `POST /evaluate`, the request payload, webhook payload, polling endpoints, and API key header remain the same.
 
+## v2.1.2 evaluation persistence fix
 
-## Candidate submission persistence
+`POST /evaluate` now writes the candidate submission directly into the existing flat
+columns of the DommerAI `public.evaluations` table. It no longer assumes that a
+`result_json` column must exist.
 
-Each `POST /evaluate` immediately upserts a pending row to the original DommerAI Supabase `evaluations` table. The `result_json.submission` object stores `exam_type`, `question`, `question_description`, and the candidate `answer`. When scoring finishes, the result is merged into the same row, so the original candidate submission is preserved together with the evaluation.
+Recommended request field:
+
+```json
+"candidate_id": "candidate-pd2-001"
+```
+
+When `candidate_id` is omitted, `eval_id` is used as a safe fallback. Render logs now
+show either `Evaluation persisted` or an explicit `Supabase evaluation persistence FAILED`
+message, so database failures are no longer hidden behind successful webhook delivery.

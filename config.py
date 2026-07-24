@@ -7,7 +7,7 @@ import os
 API_KEY = os.environ.get("DOMMER_API_KEY", "dev-key-change-in-prod")
 DEFAULT_WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "").strip()
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
-APP_VERSION = "2.1.1"
+APP_VERSION = "2.1.2"
 
 # Two separate Supabase projects are intentionally used:
 # - DOMMER_*: DKF/EKE knowledge and persisted candidate evaluations
