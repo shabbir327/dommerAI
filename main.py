@@ -35,11 +35,12 @@ async def lifespan(app: FastAPI):
     state.repository.refresh(force=True)
 
     examiner_engine = ExaminerKnowledgeEngine(state.repository)
-    state.scorer = Scorer(examiner_engine)
-    state.result_store = EvaluationResultStore(state.repository.client)
 
     state.lexical_engine = LexicalEngine()
     await state.lexical_engine.start()
+
+    state.scorer = Scorer(examiner_engine, state.lexical_engine)
+    state.result_store = EvaluationResultStore(state.repository.client)
 
     logger.info(
         "Dommer ready — knowledge=%s grammar_hub=%s default_webhook=%s",
