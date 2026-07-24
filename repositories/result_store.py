@@ -43,6 +43,10 @@ class EvaluationResultStore:
         with self._lock:
             existing = dict(self._items.get(eval_id, {}))
             stored = self._deep_merge(existing, payload)
+            # The production table requires submitted_at. Set it only on the
+            # first save and preserve it when the same evaluation is updated
+            # from pending to scored/failed.
+            stored.setdefault("submitted_at", now)
             stored["updated_at"] = now
             self._items[eval_id] = stored
 
@@ -152,7 +156,7 @@ class EvaluationResultStore:
             "question_description", "answer", "webhook_url", "rubrik", "overall",
             "pass_fail", "feedback_da", "examiner_summary", "errors", "word_count",
             "writing_statistics", "knowledge_used", "retrieval_metadata",
-            "model_metadata", "error", "created_at", "updated_at", "result_json",
+            "model_metadata", "error", "submitted_at", "created_at", "updated_at", "result_json",
         }
         return self._columns
 
@@ -165,6 +169,7 @@ class EvaluationResultStore:
             self.id_column: stored.get("eval_id"),
             self.status_column: stored.get("status"),
             self.updated_column: now,
+            "submitted_at": stored.get("submitted_at") or now,
             "candidate_id": candidate_id,
             "exam_type": submission.get("exam_type") or stored.get("exam_type"),
             "question": submission.get("question") or stored.get("question"),
