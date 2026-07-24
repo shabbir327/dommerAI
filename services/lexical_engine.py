@@ -277,3 +277,106 @@ class LexicalEngine:
             "unknown_tokens": unknown,
             "results": results,
         }
+
+    async def analyze(self, text: str) -> dict[str, Any]:
+        """Analyze candidate text and return a compact COR-backed linguistic profile.
+
+        This is the method used by the evaluation pipeline. The lower-level
+        ``analyze_text`` response remains available for the public lexicon API.
+        """
+        raw = await self.analyze_text(text, unique_only=True)
+
+        matched_tokens: list[dict[str, Any]] = []
+        verbs: list[str] = []
+        adjectives: list[str] = []
+        lemmas_seen: set[str] = set()
+        grammar_codes_seen: set[str] = set()
+
+        for result in raw.get("results", []):
+            if not isinstance(result, dict) or not result.get("found"):
+                continue
+            token = str(result.get("query", "")).strip()
+            analyses = result.get("analyses", [])
+            if not isinstance(analyses, list):
+                continue
+
+            compact_analyses: list[dict[str, Any]] = []
+            for item in analyses[:8]:
+                if not isinstance(item, dict):
+                    continue
+                lemma = str(item.get("lemma") or "").strip()
+                grammar_code = str(item.get("grammar_code") or "").strip()
+                grammar_label = str(item.get("grammatical_label") or "").strip()
+                pos = self._infer_part_of_speech(grammar_code, grammar_label)
+
+                if lemma:
+                    lemmas_seen.add(lemma)
+                if grammar_code:
+                    grammar_codes_seen.add(grammar_code)
+                if pos == "verb" and lemma and lemma not in verbs:
+                    verbs.append(lemma)
+                elif pos == "adjective" and lemma and lemma not in adjectives:
+                    adjectives.append(lemma)
+
+                compact_analyses.append({
+                    "lemma": lemma or None,
+                    "cor_lemma_id": item.get("cor_lemma_id"),
+                    "grammar_code": grammar_code or None,
+                    "grammatical_label": grammar_label or None,
+                    "part_of_speech": pos,
+                    "normalization_code": item.get("normalization_code"),
+                })
+
+            matched_tokens.append({
+                "token": token,
+                "analyses": compact_analyses,
+            })
+
+        return {
+            "source": "DanskGrammatik Hub / COR",
+            "status": "loaded",
+            "token_count": raw.get("token_count", 0),
+            "unique_token_count": raw.get("unique_token_count", 0),
+            "looked_up_count": raw.get("looked_up_count", 0),
+            "known_count": raw.get("known_count", 0),
+            "unknown_count": raw.get("unknown_count", 0),
+            "coverage_percent": raw.get("coverage_percent", 0.0),
+            "matched_lemma_count": len(lemmas_seen),
+            "grammar_code_count": len(grammar_codes_seen),
+            "detected_verbs": verbs[:40],
+            "detected_adjectives": adjectives[:40],
+            "unknown_tokens": raw.get("unknown_tokens", [])[:40],
+            "matched_tokens": matched_tokens[:100],
+            "relations": [
+                "language.cor_lemmas",
+                "language.cor_word_forms",
+                "language.cor_grammar_codes",
+            ],
+        }
+
+    @staticmethod
+    def _infer_part_of_speech(grammar_code: str, grammar_label: str) -> str | None:
+        combined = f"{grammar_code} {grammar_label}".lower()
+        code = grammar_code.upper().strip()
+        if (
+            "verbum" in combined
+            or "verb" in combined
+            or code.startswith("V")
+        ):
+            return "verb"
+        if (
+            "adjektiv" in combined
+            or "adjective" in combined
+            or "tillægsord" in combined
+            or code.startswith("ADJ")
+            or code.startswith("A_")
+        ):
+            return "adjective"
+        if "substantiv" in combined or "noun" in combined or code.startswith("N"):
+            return "noun"
+        if "adverb" in combined or code.startswith("ADV"):
+            return "adverb"
+        if "pronomen" in combined or "pronoun" in combined:
+            return "pronoun"
+        return None
+

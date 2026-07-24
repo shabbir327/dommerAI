@@ -13,6 +13,7 @@ from typing import Any, Optional
 from groq import AsyncGroq
 
 from services.examiner_knowledge import ExaminerKnowledgeEngine
+from services.lexical_engine import LexicalEngine
 from models import (
     EvaluationRequest,
     Grade,
@@ -48,13 +49,18 @@ DANISH_STOPWORDS = {
 
 
 class Scorer:
-    def __init__(self, eke: ExaminerKnowledgeEngine) -> None:
+    def __init__(self, eke: ExaminerKnowledgeEngine, lexical_engine: LexicalEngine | None = None) -> None:
         api_key = os.environ.get("GROQ_API_KEY")
         if not api_key:
             raise RuntimeError("GROQ_API_KEY environment variable is not set.")
         self.client = AsyncGroq(api_key=api_key)
         self.eke = eke
-        logger.info("Dommer scorer ready - model=%s", GROQ_MODEL)
+        self.lexical_engine = lexical_engine
+        logger.info(
+            "Dommer scorer ready - model=%s grammar_hub=%s",
+            GROQ_MODEL,
+            "enabled" if lexical_engine and lexical_engine.configured else "disabled",
+        )
 
     async def score(self, request: EvaluationRequest) -> WebhookPayload:
         word_count = len(self._words(request.answer))
@@ -65,12 +71,15 @@ class Scorer:
                 question_description=request.question_description,
                 answer=request.answer,
             )
+            lexical_analysis = await self._run_lexical_analysis(request.answer)
             raw = await self._call_groq(
                 self._system_prompt(request.exam_type),
-                self._user_prompt(request, word_count, evidence),
+                self._user_prompt(request, word_count, evidence, lexical_analysis),
                 max_tokens=MAX_OUTPUT_TOKENS,
             )
-            return self._build_payload(raw, request, word_count, evidence)
+            return self._build_payload(
+                raw, request, word_count, evidence, lexical_analysis
+            )
         except Exception as exc:
             logger.exception("Scoring failed for eval_id=%s", request.eval_id)
             return WebhookPayload(
@@ -81,7 +90,7 @@ class Scorer:
                 model_metadata={
                     "provider": "groq",
                     "model": GROQ_MODEL,
-                    "prompt_version": "knowledge-grounded-v3-inline-errors",
+                    "prompt_version": "knowledge-grounded-v4-cor-lexical",
                     "llm_calls": 1,
                 },
             )
@@ -140,7 +149,12 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
 }}"""
 
     @staticmethod
-    def _user_prompt(request: EvaluationRequest, word_count: int, evidence: dict[str, Any]) -> str:
+    def _user_prompt(
+        request: EvaluationRequest,
+        word_count: int,
+        evidence: dict[str, Any],
+        lexical_analysis: dict[str, Any],
+    ) -> str:
         description = request.question_description or ""
         return (
             f"EKSAMENSNIVEAU: {request.exam_type}\n"
@@ -148,7 +162,9 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
             f"OPGAVE:\n{request.question}\n{description}\n\n"
             f"BESVARELSE (bevar linjeskift og tegn præcist):\n{request.answer}\n\n"
             "EVIDENSPAKKE:\n"
-            f"{json.dumps(evidence, ensure_ascii=False, separators=(',', ':'))}"
+            f"{json.dumps(evidence, ensure_ascii=False, separators=(',', ':'))}\n\n"
+            "COR-LEKSIKAL ANALYSE FRA GRAMMAR HUB:\n"
+            f"{json.dumps(lexical_analysis, ensure_ascii=False, separators=(',', ':'))}"
         )
 
     async def _call_groq(self, system: str, user: str, max_tokens: int) -> dict:
@@ -185,6 +201,7 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
         request: EvaluationRequest,
         word_count: int,
         evidence: dict[str, Any],
+        lexical_analysis: dict[str, Any],
     ) -> WebhookPayload:
         levels: dict[str, str] = {}
         for dimension in ("pragmatisk", "diskursiv", "lingvistisk"):
@@ -234,13 +251,17 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
             examiner_summary=summary[:1200],
             errors=errors,
             word_count=word_count,
-            writing_statistics=self._writing_statistics(request.answer, evidence),
+            writing_statistics=self._writing_statistics(
+                request.answer, evidence, lexical_analysis
+            ),
             knowledge_used=knowledge_used,
-            retrieval_metadata=evidence.get("retrieval_metadata"),
+            retrieval_metadata=self._merge_retrieval_metadata(
+                evidence.get("retrieval_metadata"), lexical_analysis
+            ),
             model_metadata={
                 "provider": "groq",
                 "model": GROQ_MODEL,
-                "prompt_version": "knowledge-grounded-v3-inline-errors",
+                "prompt_version": "knowledge-grounded-v4-cor-lexical",
                 "llm_calls": 1,
                 "position_contract": {
                     "line": "1-based",
@@ -325,7 +346,12 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
         column_end = end - line_start + 1
         return line, column_start, column_end, answer[line_start:line_end]
 
-    def _writing_statistics(self, answer: str, evidence: dict[str, Any]) -> WritingStatistics:
+    def _writing_statistics(
+        self,
+        answer: str,
+        evidence: dict[str, Any],
+        lexical_analysis: dict[str, Any],
+    ) -> WritingStatistics:
         words = self._words(answer)
         lowered = [word.lower() for word in words]
         unique = set(lowered)
@@ -336,8 +362,16 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
         diversity = round(len(unique) / len(words), 3) if words else 0.0
 
         language = evidence.get("language_knowledge", {})
-        verbs = self._matched_titles(language.get("verbs", []) if isinstance(language, dict) else [], lowered)
-        adjectives = self._matched_titles(language.get("adjectives", []) if isinstance(language, dict) else [], lowered)
+        fallback_verbs = self._matched_titles(
+            language.get("verbs", []) if isinstance(language, dict) else [], lowered
+        )
+        fallback_adjectives = self._matched_titles(
+            language.get("adjectives", []) if isinstance(language, dict) else [], lowered
+        )
+        cor_verbs = lexical_analysis.get("detected_verbs", [])
+        cor_adjectives = lexical_analysis.get("detected_adjectives", [])
+        verbs = self._merge_strings(cor_verbs, fallback_verbs)
+        adjectives = self._merge_strings(cor_adjectives, fallback_adjectives)
         counts = Counter(word for word in lowered if len(word) > 3 and word not in DANISH_STOPWORDS)
         repeated = [word for word, count in counts.most_common(8) if count >= 3]
 
@@ -350,6 +384,67 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
             detected_adjectives=adjectives,
             repeated_words=repeated,
         )
+
+    async def _run_lexical_analysis(self, answer: str) -> dict[str, Any]:
+        if self.lexical_engine is None or not self.lexical_engine.configured:
+            return {
+                "source": "DanskGrammatik Hub / COR",
+                "status": "not_configured",
+                "detected_verbs": [],
+                "detected_adjectives": [],
+            }
+        try:
+            analysis = await self.lexical_engine.analyze(answer)
+            logger.info(
+                "COR lexical analysis complete - tokens=%s known=%s coverage=%s%%",
+                analysis.get("token_count"),
+                analysis.get("known_count"),
+                analysis.get("coverage_percent"),
+            )
+            return analysis
+        except Exception as exc:
+            logger.exception("COR lexical analysis failed; continuing with EKE only")
+            return {
+                "source": "DanskGrammatik Hub / COR",
+                "status": "failed",
+                "error": str(exc)[:300],
+                "detected_verbs": [],
+                "detected_adjectives": [],
+            }
+
+    @staticmethod
+    def _merge_retrieval_metadata(
+        metadata: Any, lexical_analysis: dict[str, Any]
+    ) -> dict[str, Any]:
+        merged = dict(metadata) if isinstance(metadata, dict) else {}
+        sources = dict(merged.get("knowledge_sources", {}))
+        sources["grammarhub_cor"] = {
+            "status": lexical_analysis.get("status", "unknown"),
+            "project": "DommerGrammar",
+            "relations": lexical_analysis.get("relations", []),
+            "tokens_considered": lexical_analysis.get("token_count", 0),
+            "unique_tokens_considered": lexical_analysis.get("unique_token_count", 0),
+            "word_forms_matched": lexical_analysis.get("known_count", 0),
+            "lemmas_matched": lexical_analysis.get("matched_lemma_count", 0),
+            "grammar_codes_matched": lexical_analysis.get("grammar_code_count", 0),
+            "coverage_percent": lexical_analysis.get("coverage_percent", 0.0),
+        }
+        if lexical_analysis.get("error"):
+            sources["grammarhub_cor"]["error"] = lexical_analysis["error"]
+        merged["knowledge_sources"] = sources
+        return merged
+
+    @staticmethod
+    def _merge_strings(primary: Any, fallback: Any) -> list[str]:
+        values: list[str] = []
+        for collection in (primary, fallback):
+            if not isinstance(collection, list):
+                continue
+            for value in collection:
+                text = str(value).strip()
+                if text and text not in values:
+                    values.append(text)
+        return values[:20]
 
     @staticmethod
     def _matched_titles(items: Any, lowered_words: list[str]) -> list[str]:
