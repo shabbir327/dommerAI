@@ -28,7 +28,7 @@ logger = logging.getLogger("dommer.scorer")
 
 LLM_PROVIDER = "groq"
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
-PROMPT_VERSION = "knowledge-grounded-v5-compact-cor"
+PROMPT_VERSION = "knowledge-grounded-v6.1-calibrated-inline-cor"
 TEMPERATURE = float(os.environ.get("GROQ_TEMPERATURE", "0.05"))
 MAX_RETRIES = int(os.environ.get("GROQ_MAX_RETRIES", "3"))
 MAX_OUTPUT_TOKENS = int(os.environ.get("GROQ_MAX_OUTPUT_TOKENS", "1600"))
@@ -112,6 +112,22 @@ Vurder tre dimensioner:
 Gyldige niveauer: Top, Midt, Bund, Under niveau.
 Gyldige karakterer: -3, 0, 2, 4, 7, 10, 12. Karakter 2 er laveste beståede.
 
+KALIBRERING:
+- Karakter 12 kræver Top i alle tre dimensioner og ingen væsentlig mangel.
+- Karakter 10 kræver en meget stærk besvarelse, men kan have mindre mangler.
+- Hvis en dimension er Bund, kan samlet karakter normalt ikke være 10 eller 12.
+- Hvis en dimension er Under niveau, skal dette tydeligt påvirke den samlede karakter.
+- Kort tekst er ikke automatisk en fejl. Vurder kun ordkrav, hvis det fremgår af opgaven eller officiel evidens.
+- Bedøm opgaveopfyldelse før sproglig elegance.
+
+SPECIFICITET:
+- Identificer hver udtrykkelig delopgave i opgaven.
+- Angiv om den er opfyldt, delvist opfyldt eller ikke opfyldt.
+- Brug en kort, ordret tekstbid fra besvarelsen som evidens, når muligt.
+- Feedback skal omtale mindst ét konkret indholdselement fra besvarelsen.
+- Undgå generiske formuleringer som 'særdeles god opfyldelse' uden konkret begrundelse.
+- Angiv mindst én reel styrke. Angiv kun et forbedringspunkt, hvis der faktisk er noget at forbedre.
+
 Fejlregler:
 - Find kun sikre, konkrete fejl.
 - 'original' skal være en eksakt, sammenhængende streng kopieret fra besvarelsen.
@@ -119,6 +135,12 @@ Fejlregler:
 - Brug ikke linjenumre eller tegnpositioner; backend beregner dem deterministisk.
 - Ved manglende ord skal 'original' være den eksisterende tekst omkring indsættelsesstedet.
 - severity: low = mindre formfejl, medium = tydelig grammatisk/lexikalsk fejl, high = fejl der væsentligt hæmmer forståelsen.
+- Hver sikker fejl skal returneres som individuel inline-feedback med eksakt originaltekst og konkret rettelse.
+- rubric_dimension angiver hvilken bedømmelsesdimension fejlen påvirker; sproglige fejl er normalt lingvistisk.
+- affects_score er false for rene stilforslag, der ikke er egentlige fejl.
+- confidence skal afspejle sikkerheden; medtag normalt kun fejl med confidence >= 0.80.
+- official_reference må kun udfyldes med et faktisk knowledge_id eller en titel fra evidenspakken. Ellers null.
+- difficulty er et omtrentligt CEFR-niveau for det sproglige punkt, ikke kandidatens samlede niveau.
 
 Brug knowledge_used kun til evidensposter, der faktisk påvirkede vurderingen. Generel sproglig vurdering må bruges uden citation, men må ikke fremstilles som officiel regel.
 
@@ -129,8 +151,22 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
   "lingvistisk": "Top|Midt|Bund|Under niveau",
   "overall": 12,
   "pass_fail": "PASSED|NOT PASSED",
-  "feedback_da": "2-4 konkrete sætninger",
-  "examiner_summary": "1-3 korte sætninger om den samlede eksaminatorbeslutning",
+  "dimension_reasons": {{
+    "pragmatisk": "konkret begrundelse med tekstnær evidens",
+    "diskursiv": "konkret begrundelse med tekstnær evidens",
+    "lingvistisk": "konkret begrundelse med tekstnær evidens"
+  }},
+  "task_coverage": [
+    {{
+      "requirement": "kort gengivelse af delopgaven",
+      "status": "fulfilled|partial|missing",
+      "evidence": "kort ordret tekstbid eller tom streng"
+    }}
+  ],
+  "strengths": ["konkret styrke"],
+  "improvements": ["konkret forbedringspunkt"],
+  "feedback_da": "2-4 konkrete sætninger til kandidaten",
+  "examiner_summary": "1-3 korte sætninger med konkret samlet begrundelse",
   "errors": [
     {{
       "original": "eksakt tekst fra besvarelsen",
@@ -336,7 +372,8 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
             value = raw.get(dimension)
             levels[dimension] = value if value in VALID_RUBRIC else "Midt"
 
-        grade = self._normalise_grade(raw.get("overall"))
+        model_grade = self._normalise_grade(raw.get("overall"))
+        grade, grade_adjustment = self._apply_grade_guardrails(model_grade, levels)
         pass_fail = "PASSED" if grade >= PASS_THRESHOLD else "NOT PASSED"
 
         valid_items = self._evidence_items(evidence)
@@ -369,6 +406,11 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
         if not summary:
             summary = feedback
 
+        dimension_reasons = self._clean_dimension_reasons(raw.get("dimension_reasons"))
+        task_coverage = self._clean_task_coverage(raw.get("task_coverage"), request.answer)
+        strengths = self._clean_string_list(raw.get("strengths"), limit=4, max_length=300)
+        improvements = self._clean_string_list(raw.get("improvements"), limit=4, max_length=300)
+
         return WebhookPayload(
             eval_id=request.eval_id,
             status="scored",
@@ -377,6 +419,10 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
             pass_fail=pass_fail,
             feedback_da=feedback[:2000],
             examiner_summary=summary[:1200],
+            dimension_reasons=dimension_reasons,
+            task_coverage=task_coverage,
+            strengths=strengths,
+            improvements=improvements,
             errors=errors,
             word_count=word_count,
             writing_statistics=self._writing_statistics(
@@ -391,6 +437,9 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
                 "model": GROQ_MODEL,
                 "prompt_version": PROMPT_VERSION,
                 "llm_calls": 1,
+                "model_grade": model_grade,
+                "grade_guardrail_applied": grade_adjustment is not None,
+                "grade_adjustment": grade_adjustment,
                 "position_contract": {
                     "line": "1-based",
                     "column_start": "1-based",
@@ -432,6 +481,22 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
 
             line, column_start, column_end, line_text = self._location(answer, start, end)
             rule_title = str(item.get("grammar_rule_title") or "").strip() or None
+            official_reference = str(item.get("official_reference") or "").strip() or None
+            try:
+                confidence = float(item.get("confidence"))
+                confidence = max(0.0, min(1.0, confidence))
+            except (TypeError, ValueError):
+                confidence = None
+            affects_score = item.get("affects_score", True)
+            if not isinstance(affects_score, bool):
+                affects_score = str(affects_score).strip().lower() not in {"false", "0", "no"}
+            rubric_dimension = str(item.get("rubric_dimension", "lingvistisk")).lower()
+            if rubric_dimension not in {"pragmatisk", "diskursiv", "lingvistisk"}:
+                rubric_dimension = "lingvistisk"
+            difficulty = str(item.get("difficulty", "unknown")).upper()
+            if difficulty not in {"A1", "A2", "B1", "B2", "C1", "C2"}:
+                difficulty = "unknown"
+
             errors.append(InlineError(
                 original=original,
                 correction=correction,
@@ -446,6 +511,11 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
                 end_char=end,
                 line_text=line_text,
                 grammar_rule_title=rule_title[:160] if rule_title else None,
+                official_reference=official_reference[:200] if official_reference else None,
+                confidence=confidence,
+                affects_score=affects_score,
+                rubric_dimension=rubric_dimension,
+                difficulty=difficulty,
             ))
             if len(errors) >= limit:
                 break
@@ -606,6 +676,81 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
         elif isinstance(language, list):
             items.extend(item for item in language if isinstance(item, dict))
         return items
+
+    @staticmethod
+    def _apply_grade_guardrails(model_grade: Grade, levels: dict[str, str]) -> tuple[Grade, str | None]:
+        values = list(levels.values())
+        adjusted = int(model_grade)
+        reason: str | None = None
+
+        if adjusted == 12 and not all(level == "Top" for level in values):
+            adjusted = 10
+            reason = "Grade 12 requires Top in all three rubric dimensions."
+        if values.count("Under niveau") >= 2 and adjusted > 0:
+            adjusted = 0
+            reason = "Two dimensions were Under niveau, so the grade was capped at 0."
+        elif "Under niveau" in values and adjusted > 2:
+            adjusted = 2
+            reason = "A dimension was Under niveau, so the grade was capped at 2."
+        elif values.count("Bund") >= 2 and adjusted > 4:
+            adjusted = 4
+            reason = "Two dimensions were Bund, so the grade was capped at 4."
+        elif "Bund" in values and adjusted > 7:
+            adjusted = 7
+            reason = "A dimension was Bund, so the grade was capped at 7."
+        elif "Top" not in values and adjusted > 7:
+            adjusted = 7
+            reason = "No dimension was Top, so the grade was capped at 7."
+
+        normalised = min(GRADE_SCALE, key=lambda grade: abs(grade - adjusted))
+        return normalised, reason  # type: ignore[return-value]
+
+    @staticmethod
+    def _clean_dimension_reasons(value: Any) -> dict[str, str]:
+        result: dict[str, str] = {}
+        if not isinstance(value, dict):
+            return result
+        for key in ("pragmatisk", "diskursiv", "lingvistisk"):
+            text = str(value.get(key, "")).strip()
+            if text:
+                result[key] = text[:600]
+        return result
+
+    @staticmethod
+    def _clean_task_coverage(value: Any, answer: str) -> list[dict[str, str]]:
+        if not isinstance(value, list):
+            return []
+        output: list[dict[str, str]] = []
+        for item in value[:10]:
+            if not isinstance(item, dict):
+                continue
+            requirement = str(item.get("requirement", "")).strip()
+            status = str(item.get("status", "")).strip().lower()
+            evidence = str(item.get("evidence", "")).strip()
+            if not requirement or status not in {"fulfilled", "partial", "missing"}:
+                continue
+            # Keep only evidence that is genuinely present in the candidate text.
+            if evidence and evidence not in answer:
+                evidence = ""
+            output.append({
+                "requirement": requirement[:300],
+                "status": status,
+                "evidence": evidence[:300],
+            })
+        return output
+
+    @staticmethod
+    def _clean_string_list(value: Any, limit: int, max_length: int) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        output: list[str] = []
+        for item in value:
+            text = str(item).strip()
+            if text and text not in output:
+                output.append(text[:max_length])
+            if len(output) >= limit:
+                break
+        return output
 
     @staticmethod
     def _normalise_grade(value: object) -> Grade:

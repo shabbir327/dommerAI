@@ -301,7 +301,7 @@ class LexicalEngine:
                 continue
 
             compact_analyses: list[dict[str, Any]] = []
-            for item in analyses[:8]:
+            for analysis_index, item in enumerate(analyses):
                 if not isinstance(item, dict):
                     continue
                 lemma = str(item.get("lemma") or "").strip()
@@ -318,14 +318,15 @@ class LexicalEngine:
                 elif pos == "adjective" and lemma and lemma not in adjectives:
                     adjectives.append(lemma)
 
-                compact_analyses.append({
-                    "lemma": lemma or None,
-                    "cor_lemma_id": item.get("cor_lemma_id"),
-                    "grammar_code": grammar_code or None,
-                    "grammatical_label": grammar_label or None,
-                    "part_of_speech": pos,
-                    "normalization_code": item.get("normalization_code"),
-                })
+                if analysis_index < 8:
+                    compact_analyses.append({
+                        "lemma": lemma or None,
+                        "cor_lemma_id": item.get("cor_lemma_id"),
+                        "grammar_code": grammar_code or None,
+                        "grammatical_label": grammar_label or None,
+                        "part_of_speech": pos,
+                        "normalization_code": item.get("normalization_code"),
+                    })
 
             matched_tokens.append({
                 "token": token,
@@ -356,27 +357,33 @@ class LexicalEngine:
 
     @staticmethod
     def _infer_part_of_speech(grammar_code: str, grammar_label: str) -> str | None:
-        combined = f"{grammar_code} {grammar_label}".lower()
+        combined = f"{grammar_code} {grammar_label}".lower().strip()
         code = grammar_code.upper().strip()
+
+        # COR labels vary between full Danish labels, abbreviations, and compact
+        # grammar codes. Use conservative word-boundary matching to avoid
+        # classifying unrelated codes merely because they contain one letter.
         if (
-            "verbum" in combined
-            or "verb" in combined
-            or code.startswith("V")
+            re.search(r"\b(verbum|verb|udsagnsord|vb\.?)\b", combined)
+            or re.match(r"^(V|VB)(?:[_.:-]|$)", code)
         ):
             return "verb"
         if (
-            "adjektiv" in combined
-            or "adjective" in combined
-            or "tillægsord" in combined
-            or code.startswith("ADJ")
-            or code.startswith("A_")
+            re.search(r"\b(adjektiv|adjective|tillægsord|adj\.?)\b", combined)
+            or re.match(r"^(ADJ|A)(?:[_.:-]|$)", code)
         ):
             return "adjective"
-        if "substantiv" in combined or "noun" in combined or code.startswith("N"):
+        if (
+            re.search(r"\b(substantiv|noun|navneord|sb\.?)\b", combined)
+            or re.match(r"^(N|SB)(?:[_.:-]|$)", code)
+        ):
             return "noun"
-        if "adverb" in combined or code.startswith("ADV"):
+        if (
+            re.search(r"\b(adverb|biord|adv\.?)\b", combined)
+            or re.match(r"^ADV(?:[_.:-]|$)", code)
+        ):
             return "adverb"
-        if "pronomen" in combined or "pronoun" in combined:
+        if re.search(r"\b(pronomen|pronoun|stedord|pron\.?)\b", combined):
             return "pronoun"
         return None
 
