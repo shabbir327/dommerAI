@@ -26,7 +26,9 @@ from models import (
 
 logger = logging.getLogger("dommer.scorer")
 
+LLM_PROVIDER = "groq"
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+PROMPT_VERSION = "knowledge-grounded-v5-compact-cor"
 TEMPERATURE = float(os.environ.get("GROQ_TEMPERATURE", "0.05"))
 MAX_RETRIES = int(os.environ.get("GROQ_MAX_RETRIES", "3"))
 MAX_OUTPUT_TOKENS = int(os.environ.get("GROQ_MAX_OUTPUT_TOKENS", "1600"))
@@ -89,9 +91,9 @@ class Scorer:
                 word_count=word_count,
                 error=str(exc),
                 model_metadata={
-                    "provider": "groq",
+                    "provider": LLM_PROVIDER,
                     "model": GROQ_MODEL,
-                    "prompt_version": "knowledge-grounded-v5-compact-cor",
+                    "prompt_version": PROMPT_VERSION,
                     "llm_calls": 1,
                 },
             )
@@ -385,9 +387,9 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
                 evidence.get("retrieval_metadata"), lexical_analysis
             ),
             model_metadata={
-                "provider": "groq",
+                "provider": LLM_PROVIDER,
                 "model": GROQ_MODEL,
-                "prompt_version": "knowledge-grounded-v5-compact-cor",
+                "prompt_version": PROMPT_VERSION,
                 "llm_calls": 1,
                 "position_contract": {
                     "line": "1-based",
