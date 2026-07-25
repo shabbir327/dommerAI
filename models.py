@@ -123,10 +123,43 @@ class KnowledgeSourceHealth(BaseModel):
     detail: Optional[str] = None
 
 
+class ScorerHealth(BaseModel):
+    status: str
+    ready: bool
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    prompt_version: Optional[str] = None
+    grammar_hub_integrated: bool = False
+
+
+class GrammarHubHealth(BaseModel):
+    status: str
+    ready: bool
+    configured: bool = False
+    database_reachable: bool = False
+    sample_row_available: bool = False
+    latency_ms: Optional[float] = None
+    integrated_into_scorer: bool = False
+    detail: Optional[str] = None
+
+
+class PersistenceHealth(BaseModel):
+    status: str
+    ready: bool
+    database_client_ready: bool = False
+
+
 class HealthResponse(BaseModel):
     status: str
+    app_version: str
     scorer_ready: bool
     knowledge_ready: bool = False
+    lexical_engine_ready: bool = False
+    grammar_hub_connected: bool = False
+    persistence_ready: bool = False
+    scorer: ScorerHealth
+    grammar_hub: GrammarHubHealth
+    persistence: PersistenceHealth
     knowledge_counts: dict[str, int] = Field(default_factory=dict)
     knowledge_sources: dict[str, KnowledgeSourceHealth] = Field(default_factory=dict)
 
