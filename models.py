@@ -22,6 +22,8 @@ ErrorType = Literal[
     "other",
 ]
 ErrorSeverity = Literal["low", "medium", "high"]
+RubricDimension = Literal["pragmatisk", "diskursiv", "lingvistisk"]
+DifficultyLevel = Literal["A1", "A2", "B1", "B2", "C1", "C2", "unknown"]
 
 
 class EvaluationRequest(BaseModel):
@@ -77,6 +79,11 @@ class InlineError(BaseModel):
     end_char: int = Field(..., ge=0, description="0-based exclusive character offset")
     line_text: str
     grammar_rule_title: Optional[str] = None
+    official_reference: Optional[str] = None
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    affects_score: bool = True
+    rubric_dimension: RubricDimension = "lingvistisk"
+    difficulty: DifficultyLevel = "unknown"
 
 
 class KnowledgeCitation(BaseModel):
@@ -105,6 +112,10 @@ class WebhookPayload(BaseModel):
     pass_fail: Optional[PassFail] = None
     feedback_da: Optional[str] = None
     examiner_summary: Optional[str] = None
+    dimension_reasons: Optional[dict[str, str]] = None
+    task_coverage: Optional[list[dict[str, str]]] = None
+    strengths: Optional[list[str]] = None
+    improvements: Optional[list[str]] = None
     errors: Optional[list[InlineError]] = None
     word_count: Optional[int] = None
     writing_statistics: Optional[WritingStatistics] = None
