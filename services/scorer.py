@@ -29,7 +29,8 @@ logger = logging.getLogger("dommer.scorer")
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 TEMPERATURE = float(os.environ.get("GROQ_TEMPERATURE", "0.05"))
 MAX_RETRIES = int(os.environ.get("GROQ_MAX_RETRIES", "3"))
-MAX_OUTPUT_TOKENS = int(os.environ.get("GROQ_MAX_OUTPUT_TOKENS", "2200"))
+MAX_OUTPUT_TOKENS = int(os.environ.get("GROQ_MAX_OUTPUT_TOKENS", "1600"))
+PROMPT_MAX_CHARS = int(os.environ.get("GROQ_PROMPT_MAX_CHARS", "26000"))
 RETRY_DELAY = 1.5
 
 GRADE_SCALE = [-3, 0, 2, 4, 7, 10, 12]
@@ -90,7 +91,7 @@ class Scorer:
                 model_metadata={
                     "provider": "groq",
                     "model": GROQ_MODEL,
-                    "prompt_version": "knowledge-grounded-v4-cor-lexical",
+                    "prompt_version": "knowledge-grounded-v5-compact-cor",
                     "llm_calls": 1,
                 },
             )
@@ -148,24 +149,144 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
   ]
 }}"""
 
-    @staticmethod
     def _user_prompt(
+        self,
         request: EvaluationRequest,
         word_count: int,
         evidence: dict[str, Any],
         lexical_analysis: dict[str, Any],
     ) -> str:
         description = request.question_description or ""
-        return (
+        compact_evidence = self._compact_evidence_for_prompt(evidence)
+        compact_lexical = self._compact_lexical_for_prompt(lexical_analysis)
+
+        fixed = (
             f"EKSAMENSNIVEAU: {request.exam_type}\n"
             f"ORDANTAL: {word_count}\n\n"
             f"OPGAVE:\n{request.question}\n{description}\n\n"
             f"BESVARELSE (bevar linjeskift og tegn præcist):\n{request.answer}\n\n"
-            "EVIDENSPAKKE:\n"
-            f"{json.dumps(evidence, ensure_ascii=False, separators=(',', ':'))}\n\n"
-            "COR-LEKSIKAL ANALYSE FRA GRAMMAR HUB:\n"
-            f"{json.dumps(lexical_analysis, ensure_ascii=False, separators=(',', ':'))}"
         )
+        evidence_json = json.dumps(
+            compact_evidence, ensure_ascii=False, separators=(",", ":")
+        )
+        lexical_json = json.dumps(
+            compact_lexical, ensure_ascii=False, separators=(",", ":")
+        )
+        prompt = (
+            fixed
+            + "UDVALGT OFFICIEL EVIDENS:\n" + evidence_json
+            + "\n\nKOMPAKT COR-ANALYSE:\n" + lexical_json
+        )
+
+        # Final safety valve for Groq TPM limits. Trim optional lexical token
+        # details first; official evidence IDs and candidate text are preserved.
+        if len(prompt) > PROMPT_MAX_CHARS:
+            compact_lexical["matched_tokens"] = compact_lexical.get("matched_tokens", [])[:10]
+            lexical_json = json.dumps(
+                compact_lexical, ensure_ascii=False, separators=(",", ":")
+            )
+            prompt = (
+                fixed
+                + "UDVALGT OFFICIEL EVIDENS:\n" + evidence_json
+                + "\n\nKOMPAKT COR-ANALYSE:\n" + lexical_json
+            )
+
+        if len(prompt) > PROMPT_MAX_CHARS:
+            compact_evidence["official_examiner_knowledge"] = (
+                compact_evidence.get("official_examiner_knowledge", [])[:5]
+            )
+            evidence_json = json.dumps(
+                compact_evidence, ensure_ascii=False, separators=(",", ":")
+            )
+            prompt = (
+                fixed
+                + "UDVALGT OFFICIEL EVIDENS:\n" + evidence_json
+                + "\n\nKOMPAKT COR-ANALYSE:\n" + lexical_json
+            )
+
+        logger.info(
+            "Prompt prepared - chars=%d estimated_input_tokens=%d max_output_tokens=%d",
+            len(prompt),
+            max(1, len(prompt) // 4),
+            MAX_OUTPUT_TOKENS,
+        )
+        return prompt
+
+    @staticmethod
+    def _compact_evidence_for_prompt(evidence: dict[str, Any]) -> dict[str, Any]:
+        official_out: list[dict[str, Any]] = []
+        official = evidence.get("official_examiner_knowledge", [])
+        if isinstance(official, list):
+            for item in official[:8]:
+                if not isinstance(item, dict):
+                    continue
+                official_out.append({
+                    "id": str(item.get("id", "")),
+                    "type": str(item.get("knowledge_type", "")),
+                    "title": str(item.get("title", ""))[:180],
+                    "statement": str(item.get("statement", ""))[:520],
+                    "quote": str(item.get("source_quote", ""))[:220],
+                    "score": item.get("retrieval_score", 0),
+                })
+
+        language_out: dict[str, list[dict[str, Any]]] = {"verbs": [], "adjectives": []}
+        language = evidence.get("language_knowledge", {})
+        if isinstance(language, dict):
+            for group_name in ("verbs", "adjectives"):
+                group = language.get(group_name, [])
+                if not isinstance(group, list):
+                    continue
+                for item in group[:5]:
+                    if not isinstance(item, dict):
+                        continue
+                    language_out[group_name].append({
+                        "id": str(item.get("id", "")),
+                        "title": str(item.get("title", ""))[:100],
+                        "statement": str(item.get("statement", ""))[:180],
+                    })
+
+        return {
+            "exam_type": evidence.get("exam_type"),
+            "official_examiner_knowledge": official_out,
+            "language_knowledge": language_out,
+        }
+
+    @staticmethod
+    def _compact_lexical_for_prompt(lexical: dict[str, Any]) -> dict[str, Any]:
+        matched_out: list[dict[str, Any]] = []
+        matched = lexical.get("matched_tokens", [])
+        if isinstance(matched, list):
+            for token_item in matched[:30]:
+                if not isinstance(token_item, dict):
+                    continue
+                analyses_out: list[dict[str, Any]] = []
+                analyses = token_item.get("analyses", [])
+                if isinstance(analyses, list):
+                    for analysis in analyses[:2]:
+                        if not isinstance(analysis, dict):
+                            continue
+                        analyses_out.append({
+                            "lemma": analysis.get("lemma"),
+                            "pos": analysis.get("part_of_speech"),
+                            "code": analysis.get("grammar_code"),
+                        })
+                if analyses_out:
+                    matched_out.append({
+                        "token": str(token_item.get("token", ""))[:80],
+                        "analyses": analyses_out,
+                    })
+
+        return {
+            "status": lexical.get("status", "unknown"),
+            "coverage_percent": lexical.get("coverage_percent", 0.0),
+            "detected_verbs": lexical.get("detected_verbs", [])[:20]
+                if isinstance(lexical.get("detected_verbs"), list) else [],
+            "detected_adjectives": lexical.get("detected_adjectives", [])[:20]
+                if isinstance(lexical.get("detected_adjectives"), list) else [],
+            "unknown_tokens": lexical.get("unknown_tokens", [])[:20]
+                if isinstance(lexical.get("unknown_tokens"), list) else [],
+            "matched_tokens": matched_out,
+        }
 
     async def _call_groq(self, system: str, user: str, max_tokens: int) -> dict:
         last_error: Optional[Exception] = None
@@ -191,6 +312,11 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
             except Exception as exc:
                 last_error = exc
                 logger.warning("Groq attempt %d/%d failed: %s", attempt, MAX_RETRIES, exc)
+                message = str(exc).lower()
+                # Retrying an oversized request cannot succeed until the TPM window
+                # changes, and it only adds latency. Fail immediately with a clear error.
+                if "request too large" in message or "error code: 413" in message:
+                    break
                 if attempt < MAX_RETRIES:
                     await asyncio.sleep(RETRY_DELAY * (2 ** (attempt - 1)))
         raise RuntimeError(f"All {MAX_RETRIES} Groq attempts failed: {last_error}")
@@ -261,7 +387,7 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
             model_metadata={
                 "provider": "groq",
                 "model": GROQ_MODEL,
-                "prompt_version": "knowledge-grounded-v4-cor-lexical",
+                "prompt_version": "knowledge-grounded-v5-compact-cor",
                 "llm_calls": 1,
                 "position_contract": {
                     "line": "1-based",

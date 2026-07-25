@@ -41,18 +41,7 @@ async def evaluate(
     else:
         webhook_source = "none"
 
-    state.result_store.save({
-        "eval_id": request.eval_id,
-        "status": "pending",
-        "submission": {
-            "candidate_id": request.candidate_id or request.eval_id,
-            "exam_type": request.exam_type,
-            "question": request.question,
-            "question_description": request.question_description,
-            "answer": request.answer,
-            "webhook_url": str(request.webhook_url) if request.webhook_url else None,
-        },
-    })
+    state.result_store.save({"eval_id": request.eval_id, "status": "pending"})
     background_tasks.add_task(score_store_and_notify, request, effective_webhook)
 
     return AckResponse(

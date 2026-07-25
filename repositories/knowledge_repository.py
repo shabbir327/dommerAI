@@ -11,8 +11,6 @@ from typing import Any
 
 from supabase import Client, create_client
 
-from config import DOMMER_SUPABASE_SERVICE_ROLE_KEY, DOMMER_SUPABASE_URL
-
 logger = logging.getLogger("dommer.knowledge")
 
 
@@ -71,16 +69,14 @@ class KnowledgeRepository:
     }
 
     def __init__(self) -> None:
-        if not DOMMER_SUPABASE_URL or not DOMMER_SUPABASE_SERVICE_ROLE_KEY:
+        url = os.environ.get("SUPABASE_URL")
+        key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        if not url or not key:
             raise RuntimeError(
-                "DOMMER_SUPABASE_URL and DOMMER_SUPABASE_SERVICE_ROLE_KEY "
-                "must be configured for DKF/EKE knowledge and evaluations."
+                "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be configured."
             )
 
-        self.client: Client = create_client(
-            DOMMER_SUPABASE_URL,
-            DOMMER_SUPABASE_SERVICE_ROLE_KEY,
-        )
+        self.client: Client = create_client(url, key)
         self.cache_ttl = int(os.environ.get("KNOWLEDGE_CACHE_TTL_SECONDS", "300"))
         self._loaded_at = 0.0
         self._records: list[KnowledgeRecord] = []

@@ -28,11 +28,6 @@ class EvaluationRequest(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
     eval_id: str = Field(..., min_length=1, examples=["pd2-test-001"])
-    candidate_id: Optional[str] = Field(
-        default=None,
-        description="Candidate identifier saved in the DommerAI evaluations table.",
-        examples=["candidate-pd2-001"],
-    )
     exam_type: ExamLevel
     question: str = Field(..., min_length=1)
     question_description: Optional[str] = None

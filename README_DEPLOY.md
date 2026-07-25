@@ -1,74 +1,81 @@
-# DommerAI v2.1 deployment
+# DommerAI v2 deployment
 
-DommerAI intentionally connects to **two different Supabase projects**.
+## What stays unchanged for Adnan
 
-## 1. DommerAI Supabase project
+- Base URL remains `https://dommerai.onrender.com`
+- `POST /evaluate` remains available
+- `X-API-Key` remains required
+- Existing request fields remain valid
+- HTTP response remains `202` with `eval_id` and `status: pending`
+- Webhook delivery remains active
+- `GET /evaluation/{eval_id}` and `GET /evaluations` remain available
 
-This project contains DKF/EKE knowledge and the `evaluations` table. Configure:
+The acknowledgement may still include the existing optional fields `webhook_url_used` and `webhook_source`, exactly as the current production code does.
 
-```text
-DOMMER_SUPABASE_URL=https://<dommerai-project-ref>.supabase.co
-DOMMER_SUPABASE_SERVICE_ROLE_KEY=<dommerai-service-role-key>
-```
+## New endpoints
 
-Candidate submissions are written to the `evaluations` table in this project. The default table settings are:
+- `GET /grammar-hub/health`
+- `GET /lexicon/lookup?word=husene`
+- `GET /lexicon/lemma/{cor_lemma_id}`
+- `POST /lexicon/analyze`
 
-```text
-EVALUATIONS_TABLE=evaluations
-EVALUATION_ID_COLUMN=eval_id
-EVALUATION_STATUS_COLUMN=status
-EVALUATION_RESULT_COLUMN=result_json
-EVALUATION_UPDATED_COLUMN=updated_at
-PERSIST_EVALUATIONS=true
-```
+All new endpoints use the same `X-API-Key`.
 
-## 2. DommerGrammar / dansk-grammar-hub Supabase project
+## GitHub update
 
-This project contains COR / ordregister.dk resources in the `language` schema. Configure:
-
-```text
-GRAMMAR_SUPABASE_URL=https://<grammar-project-ref>.supabase.co
-GRAMMAR_SUPABASE_SERVICE_ROLE_KEY=<grammar-service-role-key>
-```
-
-## Existing settings
-
-```text
-DOMMER_API_KEY=<existing-api-key>
-GROQ_API_KEY=<groq-key>
-WEBHOOK_URL=<existing-webhook-url>
-```
-
-Optional:
-
-```text
-LEXICAL_TIMEOUT_SECONDS=12
-LEXICAL_MAX_CONCURRENCY=8
-KNOWLEDGE_CACHE_TTL_SECONDS=300
-```
-
-For backward compatibility only, `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are accepted as fallbacks for the **DommerAI** project. They are never used for Grammar Hub. Prefer the explicit `DOMMER_*` names.
-
-Render start command remains:
+Copy the full folder structure into the repository root. Keep the Render start command:
 
 ```text
 uvicorn main:app --host 0.0.0.0 --port $PORT
 ```
 
-The public evaluation contract is unchanged: `POST /evaluate`, the request payload, webhook payload, polling endpoints, and API key header remain the same.
+## Required Render environment variables
 
-## v2.1.2 evaluation persistence fix
+Existing variables remain unchanged. Confirm these also exist:
 
-`POST /evaluate` now writes the candidate submission directly into the existing flat
-columns of the DommerAI `public.evaluations` table. It no longer assumes that a
-`result_json` column must exist.
-
-Recommended request field:
-
-```json
-"candidate_id": "candidate-pd2-001"
+```text
+SUPABASE_URL
+SUPABASE_SERVICE_ROLE_KEY
+DOMMER_API_KEY
+GROQ_API_KEY
+WEBHOOK_URL
 ```
 
-When `candidate_id` is omitted, `eval_id` is used as a safe fallback. Render logs now
-show either `Evaluation persisted` or an explicit `Supabase evaluation persistence FAILED`
-message, so database failures are no longer hidden behind successful webhook delivery.
+Optional lexical settings:
+
+```text
+LEXICAL_TIMEOUT_SECONDS=12
+LEXICAL_MAX_CONCURRENCY=8
+```
+
+## Smoke tests
+
+```bash
+curl "https://dommerai.onrender.com/health"
+```
+
+```bash
+curl "https://dommerai.onrender.com/grammar-hub/health" \
+  -H "X-API-Key: test-key-123"
+```
+
+```bash
+curl "https://dommerai.onrender.com/lexicon/lookup?word=husene" \
+  -H "X-API-Key: test-key-123"
+```
+
+Existing integration test:
+
+```bash
+curl -X POST "https://dommerai.onrender.com/evaluate" \
+  -H "accept: application/json" \
+  -H "X-API-Key: test-key-123" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "eval_id": "pd2-regression-test-001",
+    "exam_type": "PD2",
+    "question": "Du har købt en jakke online, men den er ankommet med en skade. Skriv en e-mail til butikken.",
+    "question_description": "Forklar problemet, fortæl hvornår du modtog jakken, og sig hvad du ønsker.",
+    "answer": "Kære kundeservice. Jeg modtog jakken i mandags, men den var ødelagt. Jeg ønsker en ny jakke."
+  }'
+```

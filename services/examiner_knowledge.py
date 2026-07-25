@@ -17,15 +17,16 @@ STOPWORDS = {
 }
 
 OFFICIAL_LIMITS = {
-    "rubric": 3,
-    "scoring_rule": 3,
-    "genre_expectation": 2,
-    "language_expectation": 2,
-    "grade_anchor": 2,
+    "rubric": 2,
+    "scoring_rule": 2,
+    "genre_expectation": 1,
+    "language_expectation": 1,
+    "grade_anchor": 1,
     "examiner_comment": 1,
-    "calibration_answer": 1,
-    "writing_task": 2,
+    "calibration_answer": 0,
+    "writing_task": 1,
 }
+MAX_OFFICIAL_ITEMS = 8
 
 
 @dataclass(frozen=True)
@@ -97,8 +98,8 @@ class ExaminerKnowledgeEngine:
             selected_ids.update(item.record.id for item in ranked)
 
         remaining = [record for record in records if record.id not in selected_ids]
-        selected.extend(self._rank(remaining, query, max(0, 15 - len(selected))))
-        return sorted(selected, key=lambda item: item.score, reverse=True)[:15]
+        selected.extend(self._rank(remaining, query, max(0, MAX_OFFICIAL_ITEMS - len(selected))))
+        return sorted(selected, key=lambda item: item.score, reverse=True)[:MAX_OFFICIAL_ITEMS]
 
     def _rank(
         self,
@@ -152,7 +153,7 @@ class ExaminerKnowledgeEngine:
             "exam_type": record.exam_type,
             "knowledge_type": record.knowledge_type,
             "title": record.title,
-            "statement": record.statement[:1200],
-            "source_quote": record.source_quote[:800],
+            "statement": record.statement[:650],
+            "source_quote": record.source_quote[:300],
             "retrieval_score": item.score,
         }
