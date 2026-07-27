@@ -10,6 +10,7 @@ from models import (
     GrammarHubHealth,
     HealthResponse,
     PersistenceHealth,
+    PosTaggerHealth,
     ScorerHealth,
 )
 from services.scorer import GROQ_MODEL, LLM_PROVIDER, PROMPT_VERSION
@@ -106,6 +107,11 @@ async def health() -> HealthResponse:
                 state.repository is not None
                 and getattr(state.repository, "client", None) is not None
             ),
+        ),
+        pos_tagger=PosTaggerHealth(
+            status="ready" if (state.pos_tagger is not None and state.pos_tagger.ready) else "unavailable",
+            ready=bool(state.pos_tagger is not None and state.pos_tagger.ready),
+            model=state.pos_tagger.model_name if (state.pos_tagger is not None and state.pos_tagger.ready) else None,
         ),
         knowledge_counts=counts,
         knowledge_sources=sources,
