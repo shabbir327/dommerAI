@@ -541,6 +541,7 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
                 if gender:
                     lookup[token] = gender
                     break
+        logger.info("Gender lookup built from COR data — %d token(s) resolved: %s", len(lookup), lookup)
         return lookup
 
     @staticmethod
@@ -573,8 +574,18 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
         actual_gender = gender_lookup.get(following_noun) if following_noun else None
 
         if actual_gender is None:
+            logger.info(
+                "Gender-swap correction rejected as unverifiable — original=%r "
+                "correction=%r noun=%r gender_lookup_had_entry=False",
+                original, correction, following_noun,
+            )
             return True  # unverifiable — reject rather than risk a wrong "fix"
         if actual_gender == _GENDER_PAIR_WORDS[orig_word]:
+            logger.info(
+                "Gender-swap correction rejected — COR confirms noun=%r is %s "
+                "gender, so original=%r was already correct (proposed correction=%r)",
+                following_noun, actual_gender, original, correction,
+            )
             return True  # the original already matched the noun's real gender
         return False  # actual gender matches the proposed word — legitimate fix
 
