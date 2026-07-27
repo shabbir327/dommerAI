@@ -6,12 +6,11 @@ pydantic==2.8.2
 python-dotenv==1.0.1
 supabase>=2.10.0,<3.0.0
 
-# Contextual Danish POS tagging (see services/pos_tagger.py). Using plain
-# spaCy's small Danish pipeline rather than dacy: dacy pulls in
-# spacy-experimental (for its biaffine parser), whose bundled C-extension
-# hardcodes CPython's internal, unstable struct layout and fails to build
-# from source on newer Python versions (e.g. "_PyCFrame has no member named
-# use_tracing" on 3.12+). da_core_news_sm needs none of that — it's pure
-# spaCy, pinned to a version with a published Python 3.12 wheel.
-spacy>=3.7,<3.8
+# Contextual Danish POS tagging (see services/pos_tagger.py). Now that
+# .python-version is pinned to 3.11.15, dacy's spacy-experimental dependency
+# has real prebuilt wheels (it has none for 3.12+, which is why this was
+# switched to plain spaCy earlier — see git history for that failure).
+# dacy pulls in spaCy itself as a dependency, so the fallback spacy_small
+# path (POS_TAGGER_MODEL=spacy_small) keeps working from the same install.
+dacy>=2.7,<3.0
 https://github.com/explosion/spacy-models/releases/download/da_core_news_sm-3.7.0/da_core_news_sm-3.7.0-py3-none-any.whl
