@@ -598,24 +598,34 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
         gender_lookup: dict[str, str],
     ) -> list[InlineError]:
         if not isinstance(raw_errors, list):
+            logger.info("Groq returned no 'errors' list at all (raw type=%s)", type(raw_errors).__name__)
             return []
+
+        raw_count = len(raw_errors)
+        rejected_incomplete = 0
+        rejected_append_only = 0
+        rejected_gender_swap = 0
+        rejected_no_span = 0
 
         errors: list[InlineError] = []
         used_spans: set[tuple[int, int]] = set()
         for item in raw_errors:
             if not isinstance(item, dict):
+                rejected_incomplete += 1
                 continue
             original = str(item.get("original", "")).strip()
             correction = str(item.get("correction", "")).strip()
             explanation_da = str(item.get("explanation_da", "")).strip()
             explanation_en = str(item.get("explanation_en", "")).strip()
             if not original or not correction or not explanation_da or not explanation_en:
+                rejected_incomplete += 1
                 continue
 
             if self._is_append_only_correction(original, correction):
                 # Not a real grammar fix — the "correction" is just the
                 # original sentence with something tacked on (a content/
                 # style suggestion mislabeled as an error). Drop it.
+                rejected_append_only += 1
                 continue
 
             if self._should_reject_gender_swap(original, correction, gender_lookup):
@@ -624,10 +634,12 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
                 # own grammatical data — or one that COR data shows was
                 # already correct in the original. Reject rather than ship
                 # a possibly-wrong "correction" to a student.
+                rejected_gender_swap += 1
                 continue
 
             span = self._find_unused_span(answer, original, used_spans)
             if span is None:
+                rejected_no_span += 1
                 continue
             start, end = span
             used_spans.add(span)
@@ -681,6 +693,13 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
             ))
             if len(errors) >= limit:
                 break
+
+        logger.info(
+            "Error filtering — raw=%d kept=%d rejected(incomplete=%d append_only=%d "
+            "gender_swap=%d no_span_match=%d)",
+            raw_count, len(errors), rejected_incomplete, rejected_append_only,
+            rejected_gender_swap, rejected_no_span,
+        )
         return errors
 
     @staticmethod
