@@ -1,6 +1,6 @@
 """Public evaluation and result-polling routes."""
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.security import require_api_key
 from app_state import state
@@ -12,7 +12,6 @@ from models import (
     SubmissionStatus,
     WebhookPayload,
 )
-from services.evaluation_service import score_store_and_notify
 
 router = APIRouter()
 
@@ -26,11 +25,10 @@ router = APIRouter()
 )
 async def evaluate(
     request: EvaluationRequest,
-    background_tasks: BackgroundTasks,
     _: str = Depends(require_api_key),
 ) -> AckResponse:
-    if state.scorer is None or state.result_store is None:
-        raise HTTPException(status_code=503, detail="Scorer is not ready.")
+    if state.result_store is None or state.arq_redis is None:
+        raise HTTPException(status_code=503, detail="Evaluation queue is not ready.")
 
     request_webhook = str(request.webhook_url) if request.webhook_url else None
     effective_webhook = request_webhook or DEFAULT_WEBHOOK_URL or None
@@ -41,8 +39,21 @@ async def evaluate(
     else:
         webhook_source = "none"
 
-    state.result_store.save({"eval_id": request.eval_id, "status": "pending"})
-    background_tasks.add_task(score_store_and_notify, request, effective_webhook)
+    submission_data = request.model_dump(mode="json", exclude_none=True)
+
+    state.result_store.save({
+        "eval_id": request.eval_id,
+        "status": "pending",
+        "submission": submission_data,
+    })
+    # job_id=eval_id gives natural idempotency: arq won't enqueue a second job
+    # with the same id while one is queued or running.
+    await state.arq_redis.enqueue_job(
+        "score_store_and_notify",
+        submission_data,
+        effective_webhook,
+        _job_id=request.eval_id,
+    )
 
     return AckResponse(
         eval_id=request.eval_id,
