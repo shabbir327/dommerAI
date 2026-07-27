@@ -160,6 +160,12 @@ class PersistenceHealth(BaseModel):
     database_client_ready: bool = False
 
 
+class PosTaggerHealth(BaseModel):
+    status: str
+    ready: bool
+    model: Optional[str] = None
+
+
 class HealthResponse(BaseModel):
     status: str
     app_version: str
@@ -171,6 +177,7 @@ class HealthResponse(BaseModel):
     scorer: ScorerHealth
     grammar_hub: GrammarHubHealth
     persistence: PersistenceHealth
+    pos_tagger: PosTaggerHealth
     knowledge_counts: dict[str, int] = Field(default_factory=dict)
     knowledge_sources: dict[str, KnowledgeSourceHealth] = Field(default_factory=dict)
 
