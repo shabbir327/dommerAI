@@ -570,6 +570,7 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
     @staticmethod
     def _build_gender_lookup(lexical_analysis: dict[str, Any]) -> dict[str, str]:
         lookup: dict[str, str] = {}
+        unresolved_samples: dict[str, list[str]] = {}
         matched = lexical_analysis.get("matched_tokens", [])
         if not isinstance(matched, list):
             return lookup
@@ -582,6 +583,7 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
             analyses = item.get("analyses", [])
             if not isinstance(analyses, list):
                 continue
+            resolved = False
             for analysis in analyses:
                 if not isinstance(analysis, dict):
                     continue
@@ -591,8 +593,23 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
                 )
                 if gender:
                     lookup[token] = gender
+                    resolved = True
                     break
-        logger.info("Gender lookup built from COR data — %d token(s) resolved: %s", len(lookup), lookup)
+            if not resolved and analyses and token not in unresolved_samples:
+                unresolved_samples[token] = [
+                    f"code={a.get('grammar_code')!r} label={a.get('grammatical_label')!r} pos={a.get('part_of_speech')!r}"
+                    for a in analyses if isinstance(a, dict)
+                ][:3]
+
+        logger.info(
+            "Gender lookup built from COR data — %d token(s) resolved: %s", len(lookup), lookup
+        )
+        if unresolved_samples:
+            logger.info(
+                "Gender lookup — %d token(s) had COR analyses but no gender match "
+                "(raw label samples): %s",
+                len(unresolved_samples), dict(list(unresolved_samples.items())[:10]),
+            )
         return lookup
 
     @staticmethod
