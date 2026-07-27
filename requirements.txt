@@ -5,3 +5,11 @@ httpx==0.27.0
 pydantic==2.8.2
 python-dotenv==1.0.1
 supabase>=2.10.0,<3.0.0
+
+# Contextual Danish POS tagging (see services/pos_tagger.py). dacy pulls in
+# spaCy as a dependency, so no separate spacy line is needed even if
+# POS_TAGGER_MODEL=spacy_small is used instead of the default dacy_small.
+dacy>=2.7,<3.0
+# After installing, download the small spaCy Danish model as a fallback
+# option even when defaulting to DaCy:
+#   python -m spacy download da_core_news_sm

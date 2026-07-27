@@ -20,6 +20,7 @@ from repositories.knowledge_repository import KnowledgeRepository
 from repositories.result_store import EvaluationResultStore
 from services.examiner_knowledge import ExaminerKnowledgeEngine
 from services.lexical_engine import LexicalEngine
+from services.pos_tagger import PosTagger
 from services.scorer import Scorer
 
 logging.basicConfig(
@@ -36,17 +37,24 @@ async def lifespan(app: FastAPI):
 
     examiner_engine = ExaminerKnowledgeEngine(state.repository)
 
-    state.lexical_engine = LexicalEngine()
+    # Loaded once here, not per-request — this is the expensive part (model
+    # weights into memory). If it fails to load, LexicalEngine falls back to
+    # its pre-tagger heuristic rather than crashing the whole service.
+    state.pos_tagger = PosTagger()
+    state.pos_tagger.load()
+
+    state.lexical_engine = LexicalEngine(pos_tagger=state.pos_tagger)
     await state.lexical_engine.start()
 
     state.scorer = Scorer(examiner_engine, state.lexical_engine)
     state.result_store = EvaluationResultStore(state.repository.client)
 
     logger.info(
-        "Dommer ready — knowledge=%s grammar_hub=%s default_webhook=%s",
+        "Dommer ready — knowledge=%s grammar_hub=%s default_webhook=%s pos_tagger=%s",
         state.repository.counts(),
         "configured" if state.lexical_engine.configured else "not configured",
         DEFAULT_WEBHOOK_URL or "not configured",
+        state.pos_tagger.model_name if state.pos_tagger.ready else "unavailable",
     )
 
     try:
