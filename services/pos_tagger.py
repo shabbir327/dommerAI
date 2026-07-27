@@ -27,7 +27,7 @@ _ADJECTIVE_TAGS = {"ADJ"}
 
 # Verify against `dacy.models()` if this ever fails to load — DaCy's
 # published model names have changed across package versions.
-_DACY_SMALL_MODEL = "da_dacy_small_trf-0.1.0"
+_DACY_SMALL_MODEL = "da_dacy_small_trf-0.2.0"
 _SPACY_SMALL_MODEL = "da_core_news_sm"
 
 
