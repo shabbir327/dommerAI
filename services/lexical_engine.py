@@ -18,6 +18,19 @@ logger = logging.getLogger("dommer.lexical")
 
 _TOKEN_RE = re.compile(r"[^\W\d_]+(?:[-'][^\W\d_]+)*", re.UNICODE)
 
+# Common Danish function words. COR sometimes has a rare/dialectal homonym
+# analysis for these (e.g. "du" also parses as an archaic verb meaning "to
+# address someone informally"). That reading is technically real but is
+# never what a candidate meant, so these tokens never count as a detected
+# verb/adjective regardless of what COR returns for them.
+_NEVER_VERB_OR_ADJECTIVE = {
+    "jeg", "du", "han", "hun", "den", "det", "vi", "i", "de",
+    "mig", "dig", "ham", "hende", "os", "jer", "dem",
+    "min", "mit", "mine", "din", "dit", "dine",
+    "hans", "hendes", "dens", "dets", "vores", "jeres", "deres",
+    "en", "et", "ikke", "og", "eller", "men", "at", "som", "der",
+}
+
 
 class LexicalEngineError(RuntimeError):
     """Raised when the Grammar Hub cannot complete a lexical operation."""
@@ -249,7 +262,9 @@ class LexicalEngine:
     def tokenize(text: str) -> list[str]:
         return _TOKEN_RE.findall(text)
 
-    async def analyze_text(self, text: str, unique_only: bool = True) -> dict[str, Any]:
+    async def analyze_text(
+        self, text: str, unique_only: bool = True, normalized_only: bool = False
+    ) -> dict[str, Any]:
         tokens = self.tokenize(text)
         lookup_tokens = list(dict.fromkeys(token.lower() for token in tokens)) if unique_only else [
             token.lower() for token in tokens
@@ -259,7 +274,7 @@ class LexicalEngine:
 
         async def bounded_lookup(token: str) -> dict[str, Any]:
             async with semaphore:
-                return await self.lookup_word(token)
+                return await self.lookup_word(token, normalized_only=normalized_only)
 
         results = await asyncio.gather(*(bounded_lookup(token) for token in lookup_tokens))
         known = [row for row in results if row["found"]]
@@ -284,7 +299,7 @@ class LexicalEngine:
         This is the method used by the evaluation pipeline. The lower-level
         ``analyze_text`` response remains available for the public lexicon API.
         """
-        raw = await self.analyze_text(text, unique_only=True)
+        raw = await self.analyze_text(text, unique_only=True, normalized_only=True)
 
         matched_tokens: list[dict[str, Any]] = []
         verbs: list[str] = []
@@ -313,10 +328,11 @@ class LexicalEngine:
                     lemmas_seen.add(lemma)
                 if grammar_code:
                     grammar_codes_seen.add(grammar_code)
-                if pos == "verb" and lemma and lemma not in verbs:
-                    verbs.append(lemma)
-                elif pos == "adjective" and lemma and lemma not in adjectives:
-                    adjectives.append(lemma)
+                if token.lower() not in _NEVER_VERB_OR_ADJECTIVE:
+                    if pos == "verb" and lemma and lemma not in verbs:
+                        verbs.append(lemma)
+                    elif pos == "adjective" and lemma and lemma not in adjectives:
+                        adjectives.append(lemma)
 
                 if analysis_index < 8:
                     compact_analyses.append({

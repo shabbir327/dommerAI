@@ -31,7 +31,7 @@ GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 PROMPT_VERSION = "knowledge-grounded-v6.1-calibrated-inline-cor"
 TEMPERATURE = float(os.environ.get("GROQ_TEMPERATURE", "0.05"))
 MAX_RETRIES = int(os.environ.get("GROQ_MAX_RETRIES", "3"))
-MAX_OUTPUT_TOKENS = int(os.environ.get("GROQ_MAX_OUTPUT_TOKENS", "1600"))
+MAX_OUTPUT_TOKENS = int(os.environ.get("GROQ_MAX_OUTPUT_TOKENS", "2400"))
 PROMPT_MAX_CHARS = int(os.environ.get("GROQ_PROMPT_MAX_CHARS", "26000"))
 RETRY_DELAY = 1.5
 
@@ -132,10 +132,13 @@ Fejlregler:
 - Find kun sikre, konkrete fejl.
 - 'original' skal være en eksakt, sammenhængende streng kopieret fra besvarelsen.
 - Gør 'original' så kort som muligt, men langt nok til at lokalisere fejlen entydigt.
+- Kombinér ALDRIG flere forskellige fejltyper i én fejlpost. Hvis en sætning fx har både forkert verbaltid, forkert artikel og forkert pluralis, skal disse returneres som tre separate fejlposter med hver deres korte 'original', ikke som én lang sammenhængende streng.
 - Brug ikke linjenumre eller tegnpositioner; backend beregner dem deterministisk.
 - Ved manglende ord skal 'original' være den eksisterende tekst omkring indsættelsesstedet.
 - severity: low = mindre formfejl, medium = tydelig grammatisk/lexikalsk fejl, high = fejl der væsentligt hæmmer forståelsen.
 - Hver sikker fejl skal returneres som individuel inline-feedback med eksakt originaltekst og konkret rettelse.
+- Brug 'other' kun hvis fejlen reelt ikke passer i nogen af de øvrige kategorier. Vælg altid den mest specifikke kategori (fx morphology for forkert bøjning, agreement for kongruensfejl, syntax for forkert ordstilling).
+- Hvis lingvistisk er Bund eller Under niveau, skal du systematisk gennemgå hele besvarelsen sætning for sætning og rapportere alle sikre fejl du finder, op til den tilladte grænse — antag ikke at én fejl er repræsentativ for det hele.
 - rubric_dimension angiver hvilken bedømmelsesdimension fejlen påvirker; sproglige fejl er normalt lingvistisk.
 - affects_score er false for rene stilforslag, der ikke er egentlige fejl.
 - confidence skal afspejle sikkerheden; medtag normalt kun fejl med confidence >= 0.80.
@@ -372,8 +375,10 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
             value = raw.get(dimension)
             levels[dimension] = value if value in VALID_RUBRIC else "Midt"
 
+        task_coverage = self._clean_task_coverage(raw.get("task_coverage"), request.answer)
+
         model_grade = self._normalise_grade(raw.get("overall"))
-        grade, grade_adjustment = self._apply_grade_guardrails(model_grade, levels)
+        grade, grade_adjustment = self._apply_grade_guardrails(model_grade, levels, task_coverage)
         pass_fail = "PASSED" if grade >= PASS_THRESHOLD else "NOT PASSED"
 
         valid_items = self._evidence_items(evidence)
@@ -407,7 +412,6 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
             summary = feedback
 
         dimension_reasons = self._clean_dimension_reasons(raw.get("dimension_reasons"))
-        task_coverage = self._clean_task_coverage(raw.get("task_coverage"), request.answer)
         strengths = self._clean_string_list(raw.get("strengths"), limit=4, max_length=300)
         improvements = self._clean_string_list(raw.get("improvements"), limit=4, max_length=300)
 
@@ -678,20 +682,35 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
         return items
 
     @staticmethod
-    def _apply_grade_guardrails(model_grade: Grade, levels: dict[str, str]) -> tuple[Grade, str | None]:
+    def _apply_grade_guardrails(
+        model_grade: Grade,
+        levels: dict[str, str],
+        task_coverage: list[dict[str, str]],
+    ) -> tuple[Grade, str | None]:
         values = list(levels.values())
         adjusted = int(model_grade)
         reason: str | None = None
+        missing_count = sum(1 for item in task_coverage if item.get("status") == "missing")
 
         if adjusted == 12 and not all(level == "Top" for level in values):
             adjusted = 10
             reason = "Grade 12 requires Top in all three rubric dimensions."
+
         if values.count("Under niveau") >= 2 and adjusted > 0:
             adjusted = 0
             reason = "Two dimensions were Under niveau, so the grade was capped at 0."
         elif "Under niveau" in values and adjusted > 2:
             adjusted = 2
             reason = "A dimension was Under niveau, so the grade was capped at 2."
+        elif levels.get("pragmatisk") == "Bund" and missing_count > 0 and adjusted > 0:
+            adjusted = 0
+            reason = (
+                "Pragmatisk was Bund and a required part of the task was missing, "
+                "so the grade was capped at 0 (fail)."
+            )
+        elif values.count("Bund") == 3 and adjusted > 2:
+            adjusted = 2
+            reason = "All three dimensions were Bund, so the grade was capped at 2."
         elif values.count("Bund") >= 2 and adjusted > 4:
             adjusted = 4
             reason = "Two dimensions were Bund, so the grade was capped at 4."
