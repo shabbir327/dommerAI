@@ -446,16 +446,17 @@ class LexicalEngine:
     def infer_gender(grammar_code: str, grammar_label: str) -> str | None:
         """Best-effort grammatical gender from COR's grammar code/label.
 
-        Heuristic, same caveat as _infer_part_of_speech — the exact label
-        vocabulary should be verified against real COR data and this may
-        need tuning. Used only to independently double-check a narrow,
-        high-risk class of proposed corrections (closed-class gender-
+        Confirmed against real COR label data: this database uses abbreviated
+        dot-separated tags like 'sb.fk.sg.ubest' (common gender) and
+        'sb.itk.sg.ubest' (neuter) — 'fk' (fælleskøn) and 'itk' (intetkøn),
+        not the full Danish words. Used only to independently double-check a
+        narrow, high-risk class of proposed corrections (closed-class gender-
         agreement swaps like hver/hvert), never as a primary signal.
         """
         combined = f"{grammar_code} {grammar_label}".lower().strip()
-        if re.search(r"\b(fælleskøn|fælles\s*køn|common gender)\b", combined):
+        if re.search(r"\bfk\b", combined) or re.search(r"\b(fælleskøn|fælles\s*køn|common gender)\b", combined):
             return "common"
-        if re.search(r"\b(intetkøn|neutrum|neuter)\b", combined):
+        if re.search(r"\bitk\b", combined) or re.search(r"\b(intetkøn|neutrum|neuter)\b", combined):
             return "neuter"
         return None
 
