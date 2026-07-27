@@ -50,6 +50,22 @@ DANISH_STOPWORDS = {
     "vil", "skal", "ikke", "min", "mit", "mine", "din", "dit", "fra", "om",
 }
 
+# Closed-class Danish words that pair by grammatical gender (common/en-ord
+# vs neuter/et-ord). A proposed correction that swaps one of these for its
+# pair (e.g. "hver" -> "hvert") is only valid if the noun it modifies is
+# actually the other gender — this is exactly the failure mode caught in
+# testing ("hver måned" incorrectly "corrected" to "hvert måned", even
+# though "måned" is common gender and "hver" was already right).
+_GENDER_PAIR_WORDS = {
+    "hver": "common", "hvert": "neuter",
+    "en": "common", "et": "neuter",
+    "den": "common", "det": "neuter",
+    "denne": "common", "dette": "neuter",
+    "sin": "common", "sit": "neuter",
+    "ingen": "common", "intet": "neuter",
+    "anden": "common", "andet": "neuter",
+}
+
 
 class Scorer:
     def __init__(self, eke: ExaminerKnowledgeEngine, lexical_engine: LexicalEngine | None = None) -> None:
@@ -135,6 +151,10 @@ Fejlregler:
 - 'original' skal være en eksakt, sammenhængende streng kopieret fra besvarelsen.
 - Gør 'original' så kort som muligt, men langt nok til at lokalisere fejlen entydigt.
 - Kombinér ALDRIG flere forskellige fejltyper i én fejlpost. Hvis en sætning fx har både forkert verbaltid, forkert artikel og forkert pluralis, skal disse returneres som tre separate fejlposter med hver deres korte 'original', ikke som én lang sammenhængende streng.
+- En fejlpost skal ændre et eller flere ord i 'original'. Hvis din 'correction' blot er 'original' med noget tilføjet i slutningen (fx en manglende detalje, et ekstra ord om indhold), er det IKKE en sproglig fejl — det er et indholdsforslag og hører hjemme i 'improvements', ikke i 'errors'.
+- Foreslå ALDRIG en rettelse, du ikke er fuldstændig sikker på er korrekt dansk. Hvis du er i tvivl om hvorvidt originalen eller din rettelse er korrekt, medtag ikke fejlen. En udeladt fejl er bedre end en forkert rettelse — kandidaten lærer forkert dansk af en forkert rettelse.
+- Opfind ALDRIG en grammatisk regel eller et regelnavn. grammar_rule_title må kun bruges til veletablerede, genkendelige kategorier (fx 'kongruens', 'bestemt/ubestemt form', 'ordstilling/V2'), aldrig en regel formuleret specifikt til dette ene tilfælde.
+- Vær særligt forsigtig med rettelser af lukket-klasse ord der bøjes efter grammatisk køn (fx hver/hvert, en/et, den/det, denne/dette, sin/sit, ingen/intet, anden/andet). Disse afhænger af substantivets faktiske køn, ikke af skøn. Eksempel: 'hver måned' er korrekt dansk, fordi 'måned' er fælleskøn ('en måned') — 'hvert måned' ville være en forkert rettelse. Ret kun disse hvis du er helt sikker på substantivets køn.
 - Brug ikke linjenumre eller tegnpositioner; backend beregner dem deterministisk.
 - Ved manglende ord skal 'original' være den eksisterende tekst omkring indsættelsesstedet.
 - severity: low = mindre formfejl, medium = tydelig grammatisk/lexikalsk fejl, high = fejl der væsentligt hæmmer forståelsen.
@@ -413,8 +433,9 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
         # here is a confirmed exact substring of the candidate's own answer —
         # see _build_inline_errors / _find_unused_span). Used below to sanity-
         # check a self-reported "Top" rating before applying the display cap.
+        gender_lookup = self._build_gender_lookup(lexical_analysis)
         validated_errors_full = self._build_inline_errors(
-            raw.get("errors", []), request.answer, 50, valid_references
+            raw.get("errors", []), request.answer, 50, valid_references, gender_lookup
         )
 
         levels, rubric_sanitization_reason = self._sanitize_rubric_levels(
@@ -477,8 +498,93 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
             },
         )
 
+    @staticmethod
+    def _is_append_only_correction(original: str, correction: str) -> bool:
+        """True if 'correction' isn't a real word-level fix — just the same
+        text with something added (or removed) at one end. This is the exact
+        shape both real-world false positives took: the original sentence,
+        verbatim, plus an extra clause tacked on. A genuine grammar/spelling
+        fix changes a word in place; it doesn't just make the sentence longer.
+        """
+        o = original.strip().lower()
+        c = correction.strip().lower()
+        if o == c:
+            return True
+        if c.startswith(o) and len(c) > len(o):
+            return True
+        if o.startswith(c) and len(o) > len(c):
+            return True
+        return False
+
+    @staticmethod
+    def _build_gender_lookup(lexical_analysis: dict[str, Any]) -> dict[str, str]:
+        lookup: dict[str, str] = {}
+        matched = lexical_analysis.get("matched_tokens", [])
+        if not isinstance(matched, list):
+            return lookup
+        for item in matched:
+            if not isinstance(item, dict):
+                continue
+            token = str(item.get("token", "")).strip().lower()
+            if not token or token in lookup:
+                continue
+            analyses = item.get("analyses", [])
+            if not isinstance(analyses, list):
+                continue
+            for analysis in analyses:
+                if not isinstance(analysis, dict):
+                    continue
+                gender = LexicalEngine.infer_gender(
+                    str(analysis.get("grammar_code") or ""),
+                    str(analysis.get("grammatical_label") or ""),
+                )
+                if gender:
+                    lookup[token] = gender
+                    break
+        return lookup
+
+    @staticmethod
+    def _should_reject_gender_swap(
+        original: str, correction: str, gender_lookup: dict[str, str]
+    ) -> bool:
+        """True if this correction should be rejected: it swaps a closed-
+        class gender word (hver/hvert, en/et, ...) for its pair, and either
+        we can't independently verify the swap is needed, or COR's own data
+        shows the original was already correct. Defaults to rejecting when
+        unverifiable — a missed error is safer than a confidently wrong one.
+        """
+        o_words = re.findall(r"[\wæøåÆØÅ]+", original.lower())
+        c_words = re.findall(r"[\wæøåÆØÅ]+", correction.lower())
+        if len(o_words) != len(c_words):
+            return False  # not a simple single-word swap; not this check's concern
+
+        diffs = [(a, b) for a, b in zip(o_words, c_words) if a != b]
+        if len(diffs) != 1:
+            return False
+
+        orig_word, new_word = diffs[0]
+        if orig_word not in _GENDER_PAIR_WORDS or new_word not in _GENDER_PAIR_WORDS:
+            return False
+        if _GENDER_PAIR_WORDS[orig_word] == _GENDER_PAIR_WORDS[new_word]:
+            return False  # same gender bucket — not actually a gender swap
+
+        idx = o_words.index(orig_word)
+        following_noun = o_words[idx + 1] if idx + 1 < len(o_words) else None
+        actual_gender = gender_lookup.get(following_noun) if following_noun else None
+
+        if actual_gender is None:
+            return True  # unverifiable — reject rather than risk a wrong "fix"
+        if actual_gender == _GENDER_PAIR_WORDS[orig_word]:
+            return True  # the original already matched the noun's real gender
+        return False  # actual gender matches the proposed word — legitimate fix
+
     def _build_inline_errors(
-        self, raw_errors: Any, answer: str, limit: int, valid_references: set[str]
+        self,
+        raw_errors: Any,
+        answer: str,
+        limit: int,
+        valid_references: set[str],
+        gender_lookup: dict[str, str],
     ) -> list[InlineError]:
         if not isinstance(raw_errors, list):
             return []
@@ -493,6 +599,20 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
             explanation_da = str(item.get("explanation_da", "")).strip()
             explanation_en = str(item.get("explanation_en", "")).strip()
             if not original or not correction or not explanation_da or not explanation_en:
+                continue
+
+            if self._is_append_only_correction(original, correction):
+                # Not a real grammar fix — the "correction" is just the
+                # original sentence with something tacked on (a content/
+                # style suggestion mislabeled as an error). Drop it.
+                continue
+
+            if self._should_reject_gender_swap(original, correction, gender_lookup):
+                # A closed-class gender-agreement swap (hver/hvert, en/et,
+                # etc.) that we can't independently confirm against COR's
+                # own grammatical data — or one that COR data shows was
+                # already correct in the original. Reject rather than ship
+                # a possibly-wrong "correction" to a student.
                 continue
 
             span = self._find_unused_span(answer, original, used_spans)
