@@ -51,21 +51,19 @@ class PosTagger:
         the tagger simply stays unavailable, and callers fall back to the
         pre-tagger heuristic (see LexicalEngine.analyze).
         """
-        choice = os.environ.get("POS_TAGGER_MODEL", "spacy_small").strip().lower()
+        choice = os.environ.get("POS_TAGGER_MODEL", "dacy_small").strip().lower()
         try:
-            if choice == "dacy_small":
-                # Opt-in only. Not installed by default — see requirements.txt
-                # for why (spacy-experimental's build failure on Python 3.12+).
-                import dacy
+            if choice == "spacy_small":
+                import spacy
 
-                self._nlp = dacy.load(_DACY_SMALL_MODEL)
+                self._nlp = spacy.load(_SPACY_SMALL_MODEL)
             elif choice == "none":
                 self._nlp = None
                 return
             else:
-                import spacy
+                import dacy
 
-                self._nlp = spacy.load(_SPACY_SMALL_MODEL)
+                self._nlp = dacy.load(_DACY_SMALL_MODEL)
             self.model_name = choice
             logger.info("POS tagger loaded — model=%s", choice)
         except Exception:
