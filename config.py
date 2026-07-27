@@ -21,7 +21,7 @@ LOG_LEVEL = os.environ.get(
     "INFO",
 ).upper()
 
-APP_VERSION = "2.1.2"
+APP_VERSION = "2.2.0"
 
 
 # Main DommerAI Supabase project
