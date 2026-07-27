@@ -146,6 +146,10 @@ SPECIFICITET:
 - Undgå generiske formuleringer som 'særdeles god opfyldelse' uden konkret begrundelse.
 - Angiv mindst én reel styrke. Angiv kun et forbedringspunkt, hvis der faktisk er noget at forbedre.
 
+SÆRLIGT OVERSETE FEJLTYPER — led aktivt efter disse, da de ofte overses:
+- Ordstilling (V2): Når en hovedsætning indledes af et andet led end subjektet (fx et tidsudtryk), skal det finitte verbum stå på andenpladsen, og subjektet flytter efter verbet. 'Hver dag jeg spiser morgenmad' er forkert — korrekt er 'Hver dag spiser jeg morgenmad'. Tjek altid sætninger, der ikke starter med subjektet.
+- Kongruens for køn i lukket-klasse ord (hver/hvert, en/et, den/det, denne/dette): disse skal stemme overens med substantivets grammatiske køn — fælleskøn (en-ord) bruger hver/en/den, intetkøn (et-ord) bruger hvert/et/det. 'hver hus' er forkert, fordi 'hus' er intetkøn ('et hus') — korrekt er 'hvert hus'. Tjek dette specifikt, når et sådant ord efterfølges af et substantiv.
+
 Fejlregler:
 - Find kun sikre, konkrete fejl.
 - 'original' skal være en eksakt, sammenhængende streng kopieret fra besvarelsen.
@@ -169,8 +173,22 @@ Fejlregler:
 
 Brug knowledge_used kun til evidensposter, der faktisk påvirkede vurderingen. Generel sproglig vurdering må bruges uden citation, men må ikke fremstilles som officiel regel.
 
+sentence_scan er en obligatorisk, systematisk gennemgang, du skal udfylde FØR resten af JSON'en, én post per sætning i besvarelsen. Den vises ikke til kandidaten og er kun til din egen kontrol. For hver sætning:
+- ordstilling_ok: sæt til false, hvis sætningen har forkert ordstilling — tjek særligt sætninger, der ikke indledes af subjektet (V2-reglen: det finitte verbum skal stå på andenpladsen).
+- boejning_og_kongruens_ok: sæt til false ved bøjnings- eller kongruensfejl — tjek særligt køn på lukket-klasse ord (hver/hvert, en/et, den/det) mod det efterfølgende substantivs køn, og verbaltid mod tidsudtryk i sætningen.
+- stavning_ok: sæt til false ved stavefejl.
+Brug denne gennemgang som grundlag for 'errors' — enhver sætning markeret false i et af felterne bør normalt give anledning til en tilsvarende fejlpost, medmindre du ved nærmere eftersyn vurderer, at der alligevel ikke er en fejl.
+
 Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig JSON:
 {{
+  "sentence_scan": [
+    {{
+      "sentence_number": 1,
+      "ordstilling_ok": true,
+      "boejning_og_kongruens_ok": true,
+      "stavning_ok": true
+    }}
+  ],
   "pragmatisk": "Top|Midt|Bund|Under niveau",
   "diskursiv": "Top|Midt|Bund|Under niveau",
   "lingvistisk": "Top|Midt|Bund|Under niveau",
@@ -384,6 +402,37 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
                     await asyncio.sleep(RETRY_DELAY * (2 ** (attempt - 1)))
         raise RuntimeError(f"All {MAX_RETRIES} Groq attempts failed: {last_error}")
 
+    @staticmethod
+    def _log_sentence_scan(sentence_scan: Any) -> None:
+        """sentence_scan is an internal scratchpad the model fills in before
+        writing 'errors' — it's never copied into WebhookPayload, so this is
+        the only place it's used. Logging it lets us measure whether forcing
+        this per-sentence pass actually raises error recall, rather than
+        guessing from the final errors count alone.
+        """
+        if not isinstance(sentence_scan, list) or not sentence_scan:
+            logger.info("Sentence scan — model did not return this field.")
+            return
+
+        flagged_word_order = 0
+        flagged_agreement = 0
+        flagged_spelling = 0
+        for item in sentence_scan:
+            if not isinstance(item, dict):
+                continue
+            if item.get("ordstilling_ok") is False:
+                flagged_word_order += 1
+            if item.get("boejning_og_kongruens_ok") is False:
+                flagged_agreement += 1
+            if item.get("stavning_ok") is False:
+                flagged_spelling += 1
+
+        logger.info(
+            "Sentence scan — %d sentence(s): word_order_flagged=%d agreement_flagged=%d "
+            "spelling_flagged=%d",
+            len(sentence_scan), flagged_word_order, flagged_agreement, flagged_spelling,
+        )
+
     def _build_payload(
         self,
         raw: dict[str, Any],
@@ -392,6 +441,8 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
         evidence: dict[str, Any],
         lexical_analysis: dict[str, Any],
     ) -> WebhookPayload:
+        self._log_sentence_scan(raw.get("sentence_scan"))
+
         levels: dict[str, str] = {}
         for dimension in ("pragmatisk", "diskursiv", "lingvistisk"):
             value = raw.get(dimension)
