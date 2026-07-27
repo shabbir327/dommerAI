@@ -13,6 +13,7 @@ from urllib.parse import quote
 import httpx
 
 from config import SUPABASE_KEY_COR, SUPABASE_URL_COR
+from services.pos_tagger import PosTagger
 
 logger = logging.getLogger("dommer.lexical")
 
@@ -37,11 +38,12 @@ class LexicalEngineError(RuntimeError):
 
 
 class LexicalEngine:
-    def __init__(self) -> None:
+    def __init__(self, pos_tagger: PosTagger | None = None) -> None:
         self.base_url = SUPABASE_URL_COR
         self.service_key = SUPABASE_KEY_COR
         self.timeout = float(os.environ.get("LEXICAL_TIMEOUT_SECONDS", "12"))
         self.max_concurrency = int(os.environ.get("LEXICAL_MAX_CONCURRENCY", "8"))
+        self.pos_tagger = pos_tagger
         self._client: httpx.AsyncClient | None = None
 
     @property
@@ -301,6 +303,17 @@ class LexicalEngine:
         """
         raw = await self.analyze_text(text, unique_only=True, normalized_only=True)
 
+        # Contextual POS for every token in *this* answer, decided by looking
+        # at the whole sentence rather than the surface form alone — this is
+        # what lets us tell "for" the preposition apart from a rare verb
+        # homonym COR also has on file, without maintaining a word list.
+        pos_votes: dict[str, str] = {}
+        if self.pos_tagger is not None and self.pos_tagger.ready:
+            try:
+                pos_votes = self.pos_tagger.tag(text)
+            except Exception:
+                logger.exception("POS tagging failed; falling back to primary analysis")
+
         matched_tokens: list[dict[str, Any]] = []
         verbs: list[str] = []
         adjectives: list[str] = []
@@ -315,7 +328,13 @@ class LexicalEngine:
             if not isinstance(analyses, list):
                 continue
 
+            contextual_pos = pos_votes.get(token.lower())
+            contextual_category = PosTagger.category(contextual_pos)
+
             compact_analyses: list[dict[str, Any]] = []
+            matching_lemma: str | None = None
+            primary_lemma: str | None = None
+            primary_pos: str | None = None
             for analysis_index, item in enumerate(analyses):
                 if not isinstance(item, dict):
                     continue
@@ -328,11 +347,12 @@ class LexicalEngine:
                     lemmas_seen.add(lemma)
                 if grammar_code:
                     grammar_codes_seen.add(grammar_code)
-                if token.lower() not in _NEVER_VERB_OR_ADJECTIVE:
-                    if pos == "verb" and lemma and lemma not in verbs:
-                        verbs.append(lemma)
-                    elif pos == "adjective" and lemma and lemma not in adjectives:
-                        adjectives.append(lemma)
+                if analysis_index == 0:
+                    primary_lemma, primary_pos = lemma, pos
+                # The first COR analysis whose own grammar code agrees with
+                # the tagger's contextual reading is the one we trust.
+                if contextual_category is not None and pos == contextual_category and matching_lemma is None:
+                    matching_lemma = lemma
 
                 if analysis_index < 8:
                     compact_analyses.append({
@@ -343,6 +363,25 @@ class LexicalEngine:
                         "part_of_speech": pos,
                         "normalization_code": item.get("normalization_code"),
                     })
+
+            if contextual_pos is not None:
+                # We have a real contextual signal for this token — trust it
+                # completely. If the tagger says this token isn't a verb or
+                # adjective here (e.g. it's a preposition), we report nothing
+                # for it, full stop, regardless of what homonym analyses COR
+                # has on file.
+                if contextual_category == "verb" and matching_lemma and matching_lemma not in verbs:
+                    verbs.append(matching_lemma)
+                elif contextual_category == "adjective" and matching_lemma and matching_lemma not in adjectives:
+                    adjectives.append(matching_lemma)
+            elif token.lower() not in _NEVER_VERB_OR_ADJECTIVE:
+                # No tagger available (not loaded, or this token fell outside
+                # its tokenization) — fall back to the old heuristic: trust
+                # only the primary (first, normalized) analysis.
+                if primary_pos == "verb" and primary_lemma and primary_lemma not in verbs:
+                    verbs.append(primary_lemma)
+                elif primary_pos == "adjective" and primary_lemma and primary_lemma not in adjectives:
+                    adjectives.append(primary_lemma)
 
             matched_tokens.append({
                 "token": token,
