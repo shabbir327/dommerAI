@@ -39,7 +39,12 @@ SUPABASE_SERVICE_ROLE_KEY
 DOMMER_API_KEY
 GROQ_API_KEY
 WEBHOOK_URL
+GROQ_GRADING_MODEL     # default: openai/gpt-oss-120b — corrects errors + full evaluation
+GROQ_INTERN_MODEL      # default: openai/gpt-oss-20b  — first-pass error detection only
 ```
+
+Both have working defaults baked into `services/scorer.py`, so these two are optional —
+only set them if you want to override the default model choice.
 
 Optional lexical settings:
 

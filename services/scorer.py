@@ -27,11 +27,17 @@ from models import (
 logger = logging.getLogger("dommer.scorer")
 
 LLM_PROVIDER = "groq"
-GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
-PROMPT_VERSION = "knowledge-grounded-v6.1-calibrated-inline-cor"
+# Grading model: does correction + full evaluation (rubric, grade, feedback).
+GROQ_GRADING_MODEL = os.environ.get("GROQ_GRADING_MODEL", "openai/gpt-oss-120b")
+# Intern model: cheap/fast first-pass error *detection* only — no corrections,
+# no grading. Its candidates are hints for the grading model, never used directly.
+GROQ_INTERN_MODEL = os.environ.get("GROQ_INTERN_MODEL", "openai/gpt-oss-20b")
+PROMPT_VERSION = "knowledge-grounded-v7.0-two-call-intern-scan"
 TEMPERATURE = float(os.environ.get("GROQ_TEMPERATURE", "0.05"))
+INTERN_TEMPERATURE = float(os.environ.get("GROQ_INTERN_TEMPERATURE", "0.1"))
 MAX_RETRIES = int(os.environ.get("GROQ_MAX_RETRIES", "3"))
 MAX_OUTPUT_TOKENS = int(os.environ.get("GROQ_MAX_OUTPUT_TOKENS", "2400"))
+INTERN_MAX_OUTPUT_TOKENS = int(os.environ.get("GROQ_INTERN_MAX_OUTPUT_TOKENS", "900"))
 PROMPT_MAX_CHARS = int(os.environ.get("GROQ_PROMPT_MAX_CHARS", "26000"))
 RETRY_DELAY = 1.5
 
@@ -76,8 +82,9 @@ class Scorer:
         self.eke = eke
         self.lexical_engine = lexical_engine
         logger.info(
-            "Dommer scorer ready - model=%s grammar_hub=%s",
-            GROQ_MODEL,
+            "Dommer scorer ready - grading_model=%s intern_model=%s grammar_hub=%s",
+            GROQ_GRADING_MODEL,
+            GROQ_INTERN_MODEL,
             "enabled" if lexical_engine and lexical_engine.configured else "disabled",
         )
 
@@ -91,13 +98,19 @@ class Scorer:
                 answer=request.answer,
             )
             lexical_analysis = await self._run_lexical_analysis(request.answer)
+            candidate_errors = await self._call_intern_scan(
+                request.answer, request.exam_type
+            )
             raw = await self._call_groq(
                 self._system_prompt(request.exam_type),
-                self._user_prompt(request, word_count, evidence, lexical_analysis),
+                self._user_prompt(
+                    request, word_count, evidence, lexical_analysis, candidate_errors
+                ),
                 max_tokens=MAX_OUTPUT_TOKENS,
+                model=GROQ_GRADING_MODEL,
             )
             return self._build_payload(
-                raw, request, word_count, evidence, lexical_analysis
+                raw, request, word_count, evidence, lexical_analysis, candidate_errors
             )
         except Exception as exc:
             logger.exception("Scoring failed for eval_id=%s", request.eval_id)
@@ -108,11 +121,102 @@ class Scorer:
                 error=str(exc),
                 model_metadata={
                     "provider": LLM_PROVIDER,
-                    "model": GROQ_MODEL,
+                    "model": GROQ_GRADING_MODEL,
+                    "intern_model": GROQ_INTERN_MODEL,
                     "prompt_version": PROMPT_VERSION,
-                    "llm_calls": 1,
+                    "llm_calls": 2,
                 },
             )
+
+    @staticmethod
+    def _intern_system_prompt() -> str:
+        return """Du er en foreløbig fejlscanner for dansk sprog. Din ENESTE opgave er at finde
+kandidatfejl i en tekst — du skal IKKE rette dem, IKKE forklare dem i detaljer,
+og IKKE vurdere karakter eller kvalitet. En anden model retter og vurderer bagefter
+på baggrund af din liste, så det er bedre at flage en usikker kandidat end at
+overse en reel fejl.
+
+Gennemgå teksten sætning for sætning og led især efter:
+- Ordstilling (V2): forkert placering af det finitte verbum, når sætningen ikke
+  indledes af subjektet (fx "Hver dag jeg spiser" er forkert ordstilling).
+- Kongruens for grammatisk køn i lukket-klasse ord (hver/hvert, en/et, den/det,
+  denne/dette, sin/sit, ingen/intet, anden/andet) mod det efterfølgende substantiv.
+- Verbal-bøjning og -tid, herunder sammenblanding af infinitiv og nutid/datid.
+- Stavefejl og forkerte endelser.
+
+For hver kandidatfejl, angiv et kort, eksakt tekstuddrag kopieret ordret fra
+besvarelsen (ikke omskrevet), en gættet fejltype, en gættet alvorlighed, og en
+kort observation. Medtag kun tekstuddrag, der findes ordret i besvarelsen.
+
+Returner KUN gyldig JSON i dette format:
+{
+  "candidate_errors": [
+    {
+      "original": "eksakt tekst kopieret fra besvarelsen",
+      "type_guess": "spelling|morphology|inversion|syntax|agreement|punctuation|word_choice|missing_word|other",
+      "severity_guess": "low|medium|high",
+      "note": "kort observation, maks 15 ord"
+    }
+  ]
+}"""
+
+    @staticmethod
+    def _intern_user_prompt(answer: str, exam_type: str) -> str:
+        return (
+            f"EKSAMENSNIVEAU: {exam_type}\n\n"
+            f"BESVARELSE (bevar linjeskift og tegn præcist):\n{answer}\n"
+        )
+
+    async def _call_intern_scan(self, answer: str, exam_type: str) -> list[dict]:
+        """Fast, cheap first-pass detection only. Never allowed to fail the
+        whole evaluation — if the intern model errors out or times out, the
+        grading model simply proceeds without hints and does its own full scan,
+        same as before this split existed.
+        """
+        try:
+            raw = await self._call_groq(
+                self._intern_system_prompt(),
+                self._intern_user_prompt(answer, exam_type),
+                max_tokens=INTERN_MAX_OUTPUT_TOKENS,
+                model=GROQ_INTERN_MODEL,
+                temperature=INTERN_TEMPERATURE,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Intern error-scan failed, proceeding without candidates: %s", exc
+            )
+            return []
+
+        raw_candidates = raw.get("candidate_errors", [])
+        if not isinstance(raw_candidates, list):
+            logger.info(
+                "Intern scan returned no candidate_errors list (type=%s)",
+                type(raw_candidates).__name__,
+            )
+            return []
+
+        validated: list[dict] = []
+        for item in raw_candidates[:40]:
+            if not isinstance(item, dict):
+                continue
+            original = str(item.get("original", "")).strip()
+            # Drop anything the intern model hallucinated — it must be an
+            # exact substring of the real answer, or the grading model (and
+            # eventually the frontend) could be pointed at text that isn't there.
+            if not original or original not in answer:
+                continue
+            validated.append({
+                "original": original[:200],
+                "type_guess": str(item.get("type_guess", "other"))[:40],
+                "severity_guess": str(item.get("severity_guess", "medium"))[:20],
+                "note": str(item.get("note", ""))[:150],
+            })
+
+        logger.info(
+            "Intern scan (%s): %d raw candidate(s), %d passed substring validation",
+            GROQ_INTERN_MODEL, len(raw_candidates), len(validated),
+        )
+        return validated
 
     @staticmethod
     def _system_prompt(exam_type: str) -> str:
@@ -236,6 +340,7 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
         word_count: int,
         evidence: dict[str, Any],
         lexical_analysis: dict[str, Any],
+        candidate_errors: list[dict] | None = None,
     ) -> str:
         description = request.question_description or ""
         compact_evidence = self._compact_evidence_for_prompt(evidence)
@@ -253,19 +358,45 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
         lexical_json = json.dumps(
             compact_lexical, ensure_ascii=False, separators=(",", ":")
         )
+        candidate_block = ""
+        if candidate_errors:
+            candidate_json = json.dumps(
+                candidate_errors, ensure_ascii=False, separators=(",", ":")
+            )
+            candidate_block = (
+                "\n\nPRÆLIMINÆR FEJLSCANNING (fra en separat, hurtigere model — "
+                "brug som udgangspunkt for din egen 'errors'-liste, men stol ikke "
+                "blindt på den: forkast falske positiver, tilføj 'correction' og "
+                "forklaringer til reelle fejl, og tilføj selv eventuelle fejl "
+                "scanningen overså):\n" + candidate_json
+            )
+
         prompt = (
             fixed
             + "UDVALGT OFFICIEL EVIDENS:\n" + evidence_json
             + "\n\nKOMPAKT COR-ANALYSE:\n" + lexical_json
+            + candidate_block
         )
 
         # Final safety valve for Groq TPM limits. Trim optional lexical token
         # details first; official evidence IDs and candidate text are preserved.
+        # The intern's candidate_block is dropped first of all if things still
+        # don't fit — it's a helpful hint, not required input.
         if len(prompt) > PROMPT_MAX_CHARS:
             compact_lexical["matched_tokens"] = compact_lexical.get("matched_tokens", [])[:10]
             lexical_json = json.dumps(
                 compact_lexical, ensure_ascii=False, separators=(",", ":")
             )
+            prompt = (
+                fixed
+                + "UDVALGT OFFICIEL EVIDENS:\n" + evidence_json
+                + "\n\nKOMPAKT COR-ANALYSE:\n" + lexical_json
+                + candidate_block
+            )
+
+        if len(prompt) > PROMPT_MAX_CHARS:
+            # Drop the intern's hint block before touching official evidence.
+            candidate_block = ""
             prompt = (
                 fixed
                 + "UDVALGT OFFICIEL EVIDENS:\n" + evidence_json
@@ -283,6 +414,7 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
                 fixed
                 + "UDVALGT OFFICIEL EVIDENS:\n" + evidence_json
                 + "\n\nKOMPAKT COR-ANALYSE:\n" + lexical_json
+                + candidate_block
             )
 
         logger.info(
@@ -369,13 +501,20 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
             "matched_tokens": matched_out,
         }
 
-    async def _call_groq(self, system: str, user: str, max_tokens: int) -> dict:
+    async def _call_groq(
+        self,
+        system: str,
+        user: str,
+        max_tokens: int,
+        model: str,
+        temperature: float = TEMPERATURE,
+    ) -> dict:
         last_error: Optional[Exception] = None
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 response = await self.client.chat.completions.create(
-                    model=GROQ_MODEL,
-                    temperature=TEMPERATURE,
+                    model=model,
+                    temperature=temperature,
                     max_tokens=max_tokens,
                     messages=[
                         {"role": "system", "content": system},
@@ -400,7 +539,7 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
                     break
                 if attempt < MAX_RETRIES:
                     await asyncio.sleep(RETRY_DELAY * (2 ** (attempt - 1)))
-        raise RuntimeError(f"All {MAX_RETRIES} Groq attempts failed: {last_error}")
+        raise RuntimeError(f"All {MAX_RETRIES} Groq attempts failed for model={model}: {last_error}")
 
     @staticmethod
     def _log_sentence_scan(sentence_scan: Any) -> None:
@@ -440,6 +579,7 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
         word_count: int,
         evidence: dict[str, Any],
         lexical_analysis: dict[str, Any],
+        candidate_errors: list[dict] | None = None,
     ) -> WebhookPayload:
         self._log_sentence_scan(raw.get("sentence_scan"))
 
@@ -531,9 +671,11 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
             ),
             model_metadata={
                 "provider": LLM_PROVIDER,
-                "model": GROQ_MODEL,
+                "model": GROQ_GRADING_MODEL,
+                "intern_model": GROQ_INTERN_MODEL,
                 "prompt_version": PROMPT_VERSION,
-                "llm_calls": 1,
+                "llm_calls": 2,
+                "intern_candidate_count": len(candidate_errors or []),
                 "model_grade": model_grade,
                 "grade_guardrail_applied": grade_adjustment is not None,
                 "grade_adjustment": grade_adjustment,

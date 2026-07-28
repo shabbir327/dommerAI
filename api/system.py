@@ -13,7 +13,12 @@ from models import (
     PosTaggerHealth,
     ScorerHealth,
 )
-from services.scorer import GROQ_MODEL, LLM_PROVIDER, PROMPT_VERSION
+from services.scorer import (
+    GROQ_GRADING_MODEL,
+    GROQ_INTERN_MODEL,
+    LLM_PROVIDER,
+    PROMPT_VERSION,
+)
 
 router = APIRouter()
 
@@ -86,7 +91,8 @@ async def health() -> HealthResponse:
             status="ready" if scorer_ready else "unavailable",
             ready=scorer_ready,
             provider=LLM_PROVIDER if scorer_ready else None,
-            model=GROQ_MODEL if scorer_ready else None,
+            model=GROQ_GRADING_MODEL if scorer_ready else None,
+            intern_model=GROQ_INTERN_MODEL if scorer_ready else None,
             prompt_version=PROMPT_VERSION if scorer_ready else None,
             grammar_hub_integrated=integrated,
         ),
