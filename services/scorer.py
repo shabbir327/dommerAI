@@ -808,15 +808,26 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
     @staticmethod
     def _is_append_only_correction(original: str, correction: str) -> bool:
         """True if 'correction' isn't a real word-level fix — just the same
-        text with something added (or removed) at one end. This is the exact
-        shape both real-world false positives took: the original sentence,
-        verbatim, plus an extra clause tacked on. A genuine grammar/spelling
-        fix changes a word in place; it doesn't just make the sentence longer.
+        text with a whole extra word/clause added (or removed) at one end.
+        This is the exact shape the original real-world false positives took:
+        the candidate's sentence, verbatim, plus an extra clause tacked on
+        as a content suggestion mislabeled as a grammar error.
+
+        Word count is checked FIRST and takes priority over the raw
+        prefix/suffix check below: many genuine Danish morphological fixes
+        (e.g. infinitive 'arbejde' -> present tense 'arbejder', 'bo' -> 'bor')
+        are, character-for-character, just the original plus a short suffix —
+        identical in shape to an appended clause, but linguistically a real
+        single-word correction, not appended content. Same word count means
+        no whole word was added or removed, so it can't be a tacked-on clause
+        — it's ruled out here before the character-level check ever runs.
         """
         o = original.strip().lower()
         c = correction.strip().lower()
         if o == c:
             return True
+        if len(o.split()) == len(c.split()):
+            return False
         if c.startswith(o) and len(c) > len(o):
             return True
         if o.startswith(c) and len(o) > len(c):
