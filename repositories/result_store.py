@@ -47,6 +47,13 @@ class EvaluationResultStore:
             # first save and preserve it when the same evaluation is updated
             # from pending to scored/failed.
             stored.setdefault("submitted_at", now)
+            # started_at: when this evaluation was first accepted (the
+            # "pending" save). completed_at: only set once the evaluation
+            # actually reaches a terminal state — previously neither column
+            # was ever written, so both stayed permanently null in Supabase.
+            stored.setdefault("started_at", now)
+            if stored.get("status") in ("scored", "failed"):
+                stored.setdefault("completed_at", now)
             stored["updated_at"] = now
             self._items[eval_id] = stored
 
@@ -156,7 +163,8 @@ class EvaluationResultStore:
             "question_description", "answer", "webhook_url", "rubrik", "overall",
             "pass_fail", "feedback_da", "examiner_summary", "errors", "word_count",
             "writing_statistics", "knowledge_used", "retrieval_metadata",
-            "model_metadata", "error", "submitted_at", "created_at", "updated_at", "result_json",
+            "model_metadata", "error", "submitted_at", "started_at", "completed_at",
+            "created_at", "updated_at", "result_json",
         }
         return self._columns
 
@@ -170,6 +178,8 @@ class EvaluationResultStore:
             self.status_column: stored.get("status"),
             self.updated_column: now,
             "submitted_at": stored.get("submitted_at") or now,
+            "started_at": stored.get("started_at"),
+            "completed_at": stored.get("completed_at"),
             "candidate_id": candidate_id,
             "exam_type": submission.get("exam_type") or stored.get("exam_type"),
             "question": submission.get("question") or stored.get("question"),
