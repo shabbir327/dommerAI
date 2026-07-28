@@ -192,6 +192,9 @@ class Scorer:
                     "error": str(exc)[:300],
                 }
         return results
+
+    @staticmethod
+    def _intern_system_prompt() -> str:
         return """Du er en foreløbig fejlscanner for dansk sprog. Din ENESTE opgave er at finde
 kandidatfejl i en tekst — du skal IKKE rette dem, IKKE forklare dem i detaljer,
 og IKKE vurdere karakter eller kvalitet. En anden model retter og vurderer bagefter
