@@ -40,8 +40,22 @@ MAX_RETRIES = int(os.environ.get("GROQ_MAX_RETRIES", "3"))
 # gpt-oss models spend part of max_tokens on hidden reasoning before writing
 # the actual JSON body — these budgets are higher than a non-reasoning model
 # (like the old llama-3.3-70b-versatile) would have needed for the same task.
-MAX_OUTPUT_TOKENS = int(os.environ.get("GROQ_MAX_OUTPUT_TOKENS", "4000"))
+# NOTE: Groq's free tier caps openai/gpt-oss-120b and openai/gpt-oss-20b at
+# 8,000 tokens PER MINUTE, and that limit is checked against (prompt tokens +
+# max_tokens) BEFORE generation even starts — not actual tokens used. A real
+# dommer prompt (evidence package + COR analysis + answer) runs ~5,000 tokens,
+# so max_tokens has to leave headroom under 8,000 total, not just be "enough
+# for reasoning." _clamp_max_tokens() enforces this dynamically per request;
+# these are just the requested ceiling before that clamp is applied.
+MAX_OUTPUT_TOKENS = int(os.environ.get("GROQ_MAX_OUTPUT_TOKENS", "2200"))
 INTERN_MAX_OUTPUT_TOKENS = int(os.environ.get("GROQ_INTERN_MAX_OUTPUT_TOKENS", "1800"))
+# Groq's per-model tokens-per-minute ceiling. 8000 matches the free tier for
+# both gpt-oss models today — raise this via env var once/if you move to
+# Groq's Developer tier (roughly 10x higher TPM), so this stops clamping
+# unnecessarily once you have real headroom.
+GROQ_TPM_LIMIT = int(os.environ.get("GROQ_TPM_LIMIT", "8000"))
+TPM_SAFETY_MARGIN = int(os.environ.get("GROQ_TPM_SAFETY_MARGIN", "300"))
+MIN_OUTPUT_TOKENS = int(os.environ.get("GROQ_MIN_OUTPUT_TOKENS", "400"))
 # low/medium/high — only applies to models that support it (gpt-oss family).
 # "low" leaves more of the token budget for the actual JSON output rather
 # than internal reasoning, which is what both these tasks are bottlenecked on.
@@ -560,6 +574,30 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
             return {"reasoning_effort": effort, "include_reasoning": False}
         return {}
 
+    @staticmethod
+    def _clamp_max_tokens(system: str, user: str, requested_max_tokens: int, model: str) -> int:
+        """Groq's TPM limit is checked against (prompt tokens + max_tokens)
+        before generation starts — not actual tokens used. Requesting more
+        output than fits alongside the prompt fails immediately with a 413,
+        regardless of how much the model would have actually generated.
+        This estimates prompt tokens (~4 chars/token, a standard rough rule
+        for English/Danish text) and clamps max_tokens so the two together
+        stay safely under GROQ_TPM_LIMIT, rather than relying on a fixed
+        constant that breaks the moment a prompt is bigger than usual.
+        """
+        estimated_prompt_tokens = (len(system) + len(user)) // 4
+        available = GROQ_TPM_LIMIT - estimated_prompt_tokens - TPM_SAFETY_MARGIN
+        clamped = max(MIN_OUTPUT_TOKENS, min(requested_max_tokens, available))
+        if clamped < requested_max_tokens:
+            logger.warning(
+                "max_tokens clamped for model=%s: requested=%d estimated_prompt_tokens=%d "
+                "tpm_limit=%d -> using=%d. If this fires often, either the prompt is "
+                "unusually large or GROQ_TPM_LIMIT needs raising (e.g. after upgrading "
+                "to Groq's Developer tier).",
+                model, requested_max_tokens, estimated_prompt_tokens, GROQ_TPM_LIMIT, clamped,
+            )
+        return clamped
+
     async def _call_groq(
         self,
         system: str,
@@ -569,6 +607,7 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
         temperature: float = TEMPERATURE,
         reasoning_effort: str = "low",
     ) -> dict:
+        max_tokens = self._clamp_max_tokens(system, user, max_tokens, model)
         last_error: Optional[Exception] = None
         for attempt in range(1, MAX_RETRIES + 1):
             try:
