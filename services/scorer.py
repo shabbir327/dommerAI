@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import time
 from collections import Counter
 from typing import Any, Optional
 
@@ -36,8 +37,16 @@ PROMPT_VERSION = "knowledge-grounded-v7.0-two-call-intern-scan"
 TEMPERATURE = float(os.environ.get("GROQ_TEMPERATURE", "0.05"))
 INTERN_TEMPERATURE = float(os.environ.get("GROQ_INTERN_TEMPERATURE", "0.1"))
 MAX_RETRIES = int(os.environ.get("GROQ_MAX_RETRIES", "3"))
-MAX_OUTPUT_TOKENS = int(os.environ.get("GROQ_MAX_OUTPUT_TOKENS", "2400"))
-INTERN_MAX_OUTPUT_TOKENS = int(os.environ.get("GROQ_INTERN_MAX_OUTPUT_TOKENS", "900"))
+# gpt-oss models spend part of max_tokens on hidden reasoning before writing
+# the actual JSON body — these budgets are higher than a non-reasoning model
+# (like the old llama-3.3-70b-versatile) would have needed for the same task.
+MAX_OUTPUT_TOKENS = int(os.environ.get("GROQ_MAX_OUTPUT_TOKENS", "4000"))
+INTERN_MAX_OUTPUT_TOKENS = int(os.environ.get("GROQ_INTERN_MAX_OUTPUT_TOKENS", "1800"))
+# low/medium/high — only applies to models that support it (gpt-oss family).
+# "low" leaves more of the token budget for the actual JSON output rather
+# than internal reasoning, which is what both these tasks are bottlenecked on.
+GRADING_REASONING_EFFORT = os.environ.get("GROQ_REASONING_EFFORT", "low")
+INTERN_REASONING_EFFORT = os.environ.get("GROQ_INTERN_REASONING_EFFORT", "low")
 PROMPT_MAX_CHARS = int(os.environ.get("GROQ_PROMPT_MAX_CHARS", "26000"))
 RETRY_DELAY = 1.5
 
@@ -108,6 +117,7 @@ class Scorer:
                 ),
                 max_tokens=MAX_OUTPUT_TOKENS,
                 model=GROQ_GRADING_MODEL,
+                reasoning_effort=GRADING_REASONING_EFFORT,
             )
             return self._build_payload(
                 raw, request, word_count, evidence, lexical_analysis, candidate_errors
@@ -128,8 +138,46 @@ class Scorer:
                 },
             )
 
-    @staticmethod
-    def _intern_system_prompt() -> str:
+    async def verify_models(self) -> dict[str, dict[str, Any]]:
+        """Minimal, cheap live pings to both Groq models — confirms the API
+        key can actually reach each one right now, distinct from just reading
+        back the configured model name string. Not called on every /health
+        hit (that would burn real Groq quota on routine uptime polling) —
+        only when explicitly requested via /health?verify_models=true.
+        """
+        results: dict[str, dict[str, Any]] = {}
+        for role, model in (
+            ("grading_model", GROQ_GRADING_MODEL),
+            ("intern_model", GROQ_INTERN_MODEL),
+        ):
+            start = time.monotonic()
+            try:
+                response = await self.client.chat.completions.create(
+                    model=model,
+                    temperature=0,
+                    max_tokens=5,
+                    messages=[
+                        {"role": "user", "content": "Reply with exactly: OK"},
+                    ],
+                )
+                content = (response.choices[0].message.content or "").strip()
+                latency_ms = round((time.monotonic() - start) * 1000, 1)
+                results[role] = {
+                    "model": model,
+                    "reachable": bool(content),
+                    "latency_ms": latency_ms,
+                    "error": None,
+                }
+            except Exception as exc:
+                latency_ms = round((time.monotonic() - start) * 1000, 1)
+                logger.warning("Model verification failed for %s (%s): %s", role, model, exc)
+                results[role] = {
+                    "model": model,
+                    "reachable": False,
+                    "latency_ms": latency_ms,
+                    "error": str(exc)[:300],
+                }
+        return results
         return """Du er en foreløbig fejlscanner for dansk sprog. Din ENESTE opgave er at finde
 kandidatfejl i en tekst — du skal IKKE rette dem, IKKE forklare dem i detaljer,
 og IKKE vurdere karakter eller kvalitet. En anden model retter og vurderer bagefter
@@ -180,6 +228,7 @@ Returner KUN gyldig JSON i dette format:
                 max_tokens=INTERN_MAX_OUTPUT_TOKENS,
                 model=GROQ_INTERN_MODEL,
                 temperature=INTERN_TEMPERATURE,
+                reasoning_effort=INTERN_REASONING_EFFORT,
             )
         except Exception as exc:
             logger.warning(
@@ -501,6 +550,16 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
             "matched_tokens": matched_out,
         }
 
+    @staticmethod
+    def _reasoning_kwargs(model: str, effort: str) -> dict[str, Any]:
+        """gpt-oss models support reasoning_effort (low/medium/high) and
+        include_reasoning; other models (e.g. llama-3.x) don't accept these
+        params, so only attach them for the gpt-oss family.
+        """
+        if "gpt-oss" in model:
+            return {"reasoning_effort": effort, "include_reasoning": False}
+        return {}
+
     async def _call_groq(
         self,
         system: str,
@@ -508,6 +567,7 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
         max_tokens: int,
         model: str,
         temperature: float = TEMPERATURE,
+        reasoning_effort: str = "low",
     ) -> dict:
         last_error: Optional[Exception] = None
         for attempt in range(1, MAX_RETRIES + 1):
@@ -521,8 +581,20 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
                         {"role": "user", "content": user},
                     ],
                     response_format={"type": "json_object"},
+                    **self._reasoning_kwargs(model, reasoning_effort),
                 )
-                content = response.choices[0].message.content
+                choice = response.choices[0]
+                if getattr(choice, "finish_reason", None) == "length":
+                    # The model hit max_tokens before finishing — content may
+                    # still parse as valid JSON but with fields silently empty
+                    # or truncated. Surfacing this in logs makes that failure
+                    # mode visible instead of looking like a normal response.
+                    logger.warning(
+                        "Groq response for model=%s hit finish_reason=length "
+                        "(max_tokens=%d) — output may be truncated/incomplete.",
+                        model, max_tokens,
+                    )
+                content = choice.message.content
                 if not content:
                     raise RuntimeError("Groq returned an empty response.")
                 parsed = json.loads(content)
