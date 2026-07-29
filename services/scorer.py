@@ -11,7 +11,7 @@ import time
 from collections import Counter
 from typing import Any, Optional
 
-from groq import AsyncGroq
+from openai import AsyncOpenAI
 
 from services.examiner_knowledge import ExaminerKnowledgeEngine
 from services.lexical_engine import LexicalEngine
@@ -27,7 +27,29 @@ from models import (
 
 logger = logging.getLogger("dommer.scorer")
 
-LLM_PROVIDER = "groq"
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER_NAME", "groq")
+# Any OpenAI-compatible endpoint works here — Groq, Together AI, Fireworks,
+# Cerebras, Mistral, DeepInfra all expose one.
+#
+# Grading and intern can each point at a COMPLETELY DIFFERENT provider —
+# useful for benchmarking candidate intern models (e.g. Qwen on Groq, or
+# Mistral on Mistral's own API) without touching the grading model at all.
+# Per-role vars fall back to the shared LLM_BASE_URL/LLM_API_KEY/LLM_PROVIDER_NAME
+# if unset, which in turn default to Groq — so nothing changes unless you
+# deliberately set the *_GRADING_* or *_INTERN_* variant.
+GRADING_PROVIDER = os.environ.get("LLM_GRADING_PROVIDER_NAME", LLM_PROVIDER)
+GRADING_BASE_URL = os.environ.get("LLM_GRADING_BASE_URL") or os.environ.get(
+    "LLM_BASE_URL", "https://api.groq.com/openai/v1"
+)
+GRADING_API_KEY = (
+    os.environ.get("LLM_GRADING_API_KEY")
+    or os.environ.get("LLM_API_KEY")
+    or os.environ.get("GROQ_API_KEY")
+)
+INTERN_PROVIDER = os.environ.get("LLM_INTERN_PROVIDER_NAME", GRADING_PROVIDER)
+INTERN_BASE_URL = os.environ.get("LLM_INTERN_BASE_URL") or GRADING_BASE_URL
+INTERN_API_KEY = os.environ.get("LLM_INTERN_API_KEY") or GRADING_API_KEY
+
 # Grading model: does correction + full evaluation (rubric, grade, feedback).
 GROQ_GRADING_MODEL = os.environ.get("GROQ_GRADING_MODEL", "openai/gpt-oss-120b")
 # Intern model: cheap/fast first-pass error *detection* only — no corrections,
@@ -106,16 +128,31 @@ _GENDER_PAIR_WORDS = {
 
 class Scorer:
     def __init__(self, eke: ExaminerKnowledgeEngine, lexical_engine: LexicalEngine | None = None) -> None:
-        api_key = os.environ.get("GROQ_API_KEY")
-        if not api_key:
-            raise RuntimeError("GROQ_API_KEY environment variable is not set.")
-        self.client = AsyncGroq(api_key=api_key)
+        if not GRADING_API_KEY:
+            raise RuntimeError(
+                "No grading LLM API key set. Set LLM_GRADING_API_KEY, LLM_API_KEY, "
+                "or GROQ_API_KEY (legacy fallback)."
+            )
+        if not INTERN_API_KEY:
+            raise RuntimeError(
+                "No intern LLM API key set. Set LLM_INTERN_API_KEY, LLM_API_KEY, "
+                "or GROQ_API_KEY (legacy fallback)."
+            )
+        self.grading_client = AsyncOpenAI(base_url=GRADING_BASE_URL, api_key=GRADING_API_KEY)
+        # Reuse the same client object when both roles share identical config
+        # (the default/common case) rather than opening a second connection
+        # pool for no reason.
+        if INTERN_BASE_URL == GRADING_BASE_URL and INTERN_API_KEY == GRADING_API_KEY:
+            self.intern_client = self.grading_client
+        else:
+            self.intern_client = AsyncOpenAI(base_url=INTERN_BASE_URL, api_key=INTERN_API_KEY)
         self.eke = eke
         self.lexical_engine = lexical_engine
         logger.info(
-            "Dommer scorer ready - grading_model=%s intern_model=%s grammar_hub=%s",
-            GROQ_GRADING_MODEL,
-            GROQ_INTERN_MODEL,
+            "Dommer scorer ready - grading: provider=%s base_url=%s model=%s | "
+            "intern: provider=%s base_url=%s model=%s | grammar_hub=%s",
+            GRADING_PROVIDER, GRADING_BASE_URL, GROQ_GRADING_MODEL,
+            INTERN_PROVIDER, INTERN_BASE_URL, GROQ_INTERN_MODEL,
             "enabled" if lexical_engine and lexical_engine.configured else "disabled",
         )
 
@@ -139,6 +176,8 @@ class Scorer:
                 ),
                 max_tokens=MAX_OUTPUT_TOKENS,
                 model=GROQ_GRADING_MODEL,
+                client=self.grading_client,
+                provider=GRADING_PROVIDER,
                 reasoning_effort=GRADING_REASONING_EFFORT,
             )
             return self._build_payload(
@@ -152,7 +191,8 @@ class Scorer:
                 word_count=word_count,
                 error=str(exc),
                 model_metadata={
-                    "provider": LLM_PROVIDER,
+                    "provider": GRADING_PROVIDER,
+                    "intern_provider": INTERN_PROVIDER,
                     "model": GROQ_GRADING_MODEL,
                     "intern_model": GROQ_INTERN_MODEL,
                     "prompt_version": PROMPT_VERSION,
@@ -168,13 +208,13 @@ class Scorer:
         only when explicitly requested via /health?verify_models=true.
         """
         results: dict[str, dict[str, Any]] = {}
-        for role, model in (
-            ("grading_model", GROQ_GRADING_MODEL),
-            ("intern_model", GROQ_INTERN_MODEL),
+        for role, model, client in (
+            ("grading_model", GROQ_GRADING_MODEL, self.grading_client),
+            ("intern_model", GROQ_INTERN_MODEL, self.intern_client),
         ):
             start = time.monotonic()
             try:
-                response = await self.client.chat.completions.create(
+                response = await client.chat.completions.create(
                     model=model,
                     temperature=0,
                     max_tokens=5,
@@ -252,6 +292,8 @@ Returner KUN gyldig JSON i dette format:
                 self._intern_user_prompt(answer, exam_type),
                 max_tokens=INTERN_MAX_OUTPUT_TOKENS,
                 model=GROQ_INTERN_MODEL,
+                client=self.intern_client,
+                provider=INTERN_PROVIDER,
                 temperature=INTERN_TEMPERATURE,
                 reasoning_effort=INTERN_REASONING_EFFORT,
             )
@@ -581,12 +623,15 @@ Returner KUN gyldig JSON:
         }
 
     @staticmethod
-    def _reasoning_kwargs(model: str, effort: str) -> dict[str, Any]:
-        """gpt-oss models support reasoning_effort (low/medium/high) and
-        include_reasoning; other models (e.g. llama-3.x) don't accept these
-        params, so only attach them for the gpt-oss family.
+    def _reasoning_kwargs(model: str, effort: str, provider: str) -> dict[str, Any]:
+        """reasoning_effort/include_reasoning are Groq-specific controls for
+        the gpt-oss family — other providers serving the same model (Together
+        AI, Fireworks, Cerebras, Mistral, etc.) may not support these fields
+        at all, so only attach them when actually talking to Groq for that
+        role. Grading and intern can each be on a different provider, so this
+        is checked per-call, not from one shared global.
         """
-        if "gpt-oss" in model:
+        if provider.lower() == "groq" and "gpt-oss" in model:
             return {"reasoning_effort": effort, "include_reasoning": False}
         return {}
 
@@ -623,6 +668,8 @@ Returner KUN gyldig JSON:
         user: str,
         max_tokens: int,
         model: str,
+        client: AsyncOpenAI,
+        provider: str,
         temperature: float = TEMPERATURE,
         reasoning_effort: str = "low",
     ) -> dict:
@@ -630,7 +677,7 @@ Returner KUN gyldig JSON:
         last_error: Optional[Exception] = None
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                response = await self.client.chat.completions.create(
+                response = await client.chat.completions.create(
                     model=model,
                     temperature=temperature,
                     max_tokens=max_tokens,
@@ -639,7 +686,7 @@ Returner KUN gyldig JSON:
                         {"role": "user", "content": user},
                     ],
                     response_format={"type": "json_object"},
-                    **self._reasoning_kwargs(model, reasoning_effort),
+                    **self._reasoning_kwargs(model, reasoning_effort, provider),
                 )
                 choice = response.choices[0]
                 if getattr(choice, "finish_reason", None) == "length":
@@ -800,7 +847,8 @@ Returner KUN gyldig JSON:
                 evidence.get("retrieval_metadata"), lexical_analysis
             ),
             model_metadata={
-                "provider": LLM_PROVIDER,
+                "provider": GRADING_PROVIDER,
+                "intern_provider": INTERN_PROVIDER,
                 "model": GROQ_GRADING_MODEL,
                 "intern_model": GROQ_INTERN_MODEL,
                 "prompt_version": PROMPT_VERSION,
