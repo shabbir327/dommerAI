@@ -85,13 +85,13 @@ TPM_SAFETY_MARGIN = int(os.environ.get("GROQ_TPM_SAFETY_MARGIN", "600"))
 # char-count estimate assumes. A proportional buffer (not just a fixed
 # margin) is what actually keeps this safe across submission lengths.
 TOKEN_ESTIMATE_SAFETY_FACTOR = float(os.environ.get("GROQ_TOKEN_ESTIMATE_SAFETY_FACTOR", "1.35"))
-MIN_OUTPUT_TOKENS = int(os.environ.get("GROQ_MIN_OUTPUT_TOKENS", "400"))
+MIN_OUTPUT_TOKENS = int(os.environ.get("GROQ_MIN_OUTPUT_TOKENS", "900"))
 # low/medium/high — only applies to models that support it (gpt-oss family).
 # "low" leaves more of the token budget for the actual JSON output rather
 # than internal reasoning, which is what both these tasks are bottlenecked on.
 GRADING_REASONING_EFFORT = os.environ.get("GROQ_REASONING_EFFORT", "low")
 INTERN_REASONING_EFFORT = os.environ.get("GROQ_INTERN_REASONING_EFFORT", "low")
-PROMPT_MAX_CHARS = int(os.environ.get("GROQ_PROMPT_MAX_CHARS", "26000"))
+PROMPT_MAX_CHARS = int(os.environ.get("GROQ_PROMPT_MAX_CHARS", "16000"))
 RETRY_DELAY = 1.5
 
 GRADE_SCALE = [-3, 0, 2, 4, 7, 10, 12]
@@ -393,7 +393,7 @@ Fejlregler:
 
 Brug knowledge_used kun til evidensposter, der faktisk påvirkede vurderingen. Generel sproglig vurdering må bruges uden citation, men må ikke fremstilles som officiel regel.
 
-sentence_scan er en obligatorisk, systematisk gennemgang, du skal udfylde FØR resten af JSON'en, én post per sætning i besvarelsen. Den vises ikke til kandidaten og er kun til din egen kontrol. For hver sætning:
+sentence_scan er en obligatorisk, systematisk gennemgang, du skal udfylde FØR resten af JSON'en, én post per sætning i besvarelsen — MAKS 25 poster. Denne grænse er en sikkerhedsforanstaltning for usædvanligt lange besvarelser og bør ikke påvirke en normal eksamensbesvarelse; hvis den alligevel rammes, prioriter de sætninger, der efter din vurdering er mest tilbøjelige til at indeholde fejl. Den vises ikke til kandidaten og er kun til din egen kontrol. For hver sætning:
 - ordstilling_ok: sæt til false, hvis sætningen har forkert ordstilling — tjek særligt sætninger, der ikke indledes af subjektet (V2-reglen: det finitte verbum skal stå på andenpladsen).
 - boejning_og_kongruens_ok: sæt til false ved bøjnings- eller kongruensfejl — tjek særligt køn på lukket-klasse ord (hver/hvert, en/et, den/det) mod det efterfølgende substantivs køn, og verbaltid mod tidsudtryk i sætningen.
 - stavning_ok: sæt til false ved stavefejl.
@@ -630,9 +630,17 @@ Returner KUN gyldig JSON:
         at all, so only attach them when actually talking to Groq for that
         role. Grading and intern can each be on a different provider, so this
         is checked per-call, not from one shared global.
+
+        These are passed via extra_body, not as direct keyword arguments:
+        Groq's own SDK accepted arbitrary custom params directly, but the
+        generic openai SDK validates kwargs against its own fixed signature
+        and raises a client-side TypeError for anything it doesn't
+        recognize — even though Groq's actual REST API accepts these fields
+        fine. extra_body bypasses that client-side validation and merges
+        straight into the raw JSON request body.
         """
         if provider.lower() == "groq" and "gpt-oss" in model:
-            return {"reasoning_effort": effort, "include_reasoning": False}
+            return {"extra_body": {"reasoning_effort": effort, "include_reasoning": False}}
         return {}
 
     @staticmethod
