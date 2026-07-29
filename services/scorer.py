@@ -360,7 +360,7 @@ FEJLREGLER:
 - Ingen linjenumre/tegnpositioner (backend beregner dem). Ved manglende ord: 'original' er teksten omkring indsættelsesstedet.
 - severity: low=mindre formfejl, medium=tydelig fejl, high=hæmmer forståelsen væsentligt.
 - type='other' kun hvis intet andet passer — vælg altid den mest specifikke kategori.
-- Er lingvistisk Bund/Under niveau: gennemgå hele besvarelsen systematisk og rapportér alle sikre fejl op til grænsen, ikke bare ét eksempel.
+- Er lingvistisk Bund/Under niveau: gennemgå hele besvarelsen systematisk, ikke bare ét eksempel — men medtag MAKS 8 fejlposter i alt, uanset hvor mange du finder. Vælg de 8 mest repræsentative/alvorlige, hvis der er flere.
 - rubric_dimension: hvilken dimension fejlen påvirker (sproglige fejl er normalt lingvistisk). affects_score=false kun for rene stilforslag.
 - confidence afspejler sikkerhed; medtag normalt kun >= 0.80. official_reference kun med et reelt knowledge_id/titel fra evidenspakken, ellers null. difficulty = omtrentligt CEFR-niveau for selve fejlen.
 
