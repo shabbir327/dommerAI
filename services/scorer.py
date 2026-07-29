@@ -346,7 +346,7 @@ Niveauer: Top, Midt, Bund, Under niveau. Karakterer: -3, 0, 2, 4, 7, 10, 12 (2 e
 
 KALIBRERING: 12 kræver Top i alle tre dimensioner og ingen væsentlig mangel. 10 kræver meget stærk besvarelse med højst mindre mangler. Bund i én dimension udelukker normalt 10/12. Under niveau i én dimension skal tydeligt trække samlet karakter ned. Kort tekst er ikke automatisk en fejl — vurder kun ordkrav hvis opgaven/evidens kræver det. Opgaveopfyldelse vejer tungere end sproglig elegance.
 
-SPECIFICITET: Identificer hver delopgave og angiv fulfilled/partial/missing med kort ordret evidens. Feedback skal nævne mindst ét konkret indholdselement, aldrig kun generiske vendinger. Angiv mindst én reel styrke; kun forbedringspunkter, hvis der faktisk er noget at forbedre.
+SPECIFICITET: Identificer hver delopgave og angiv fulfilled/partial/missing med kort ordret evidens — MAKS 5 poster i task_coverage; slå nært beslægtede delkrav sammen i én post frem for at opremse hvert enkelt separat. Feedback skal nævne mindst ét konkret indholdselement, aldrig kun generiske vendinger. Angiv mindst én reel styrke; kun forbedringspunkter, hvis der faktisk er noget at forbedre.
 
 TO FEJLTYPER DER OFTE OVERSES:
 - Ordstilling/V2: når sætningen ikke indledes af subjektet, skal det finitte verbum stå på andenpladsen og subjektet flytte efter. 'Hver dag jeg spiser' er forkert; 'Hver dag spiser jeg' er korrekt.
@@ -1348,7 +1348,7 @@ Returner KUN gyldig JSON:
         if not isinstance(value, list):
             return []
         output: list[dict[str, str]] = []
-        for item in value[:10]:
+        for item in value[:5]:
             if not isinstance(item, dict):
                 continue
             requirement = str(item.get("requirement", "")).strip()
