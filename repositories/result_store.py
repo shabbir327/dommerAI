@@ -1,7 +1,7 @@
 """Persist candidate submissions and completed evaluations in DommerAI Supabase.
 
 The production ``evaluations`` table uses normal columns (``exam_type``, ``answer``,
-``feedback_da`` and so on), rather than requiring a single ``result_json`` column.
+``feedback`` and so on), rather than requiring a single ``result_json`` column.
 This store discovers the live table columns, writes only supported fields, and keeps
 an in-memory cache for fast polling.
 """
@@ -161,7 +161,7 @@ class EvaluationResultStore:
         self._columns = {
             "eval_id", "candidate_id", "exam_type", "status", "question",
             "question_description", "answer", "webhook_url", "rubrik", "overall",
-            "pass_fail", "feedback_da", "examiner_summary", "errors", "word_count",
+            "pass_fail", "feedback", "examiner_summary", "errors", "word_count",
             "writing_statistics", "knowledge_used", "retrieval_metadata",
             "model_metadata", "error", "submitted_at", "started_at", "completed_at",
             "created_at", "updated_at", "result_json",
@@ -189,7 +189,7 @@ class EvaluationResultStore:
             "rubrik": stored.get("rubrik"),
             "overall": stored.get("overall"),
             "pass_fail": stored.get("pass_fail"),
-            "feedback_da": stored.get("feedback_da"),
+            "feedback": stored.get("feedback"),
             "examiner_summary": stored.get("examiner_summary"),
             "errors": stored.get("errors"),
             "word_count": stored.get("word_count"),
