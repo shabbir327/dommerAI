@@ -54,7 +54,15 @@ INTERN_MAX_OUTPUT_TOKENS = int(os.environ.get("GROQ_INTERN_MAX_OUTPUT_TOKENS", "
 # Groq's Developer tier (roughly 10x higher TPM), so this stops clamping
 # unnecessarily once you have real headroom.
 GROQ_TPM_LIMIT = int(os.environ.get("GROQ_TPM_LIMIT", "8000"))
-TPM_SAFETY_MARGIN = int(os.environ.get("GROQ_TPM_SAFETY_MARGIN", "300"))
+TPM_SAFETY_MARGIN = int(os.environ.get("GROQ_TPM_SAFETY_MARGIN", "600"))
+# The ~4 chars/token rule of thumb is optimistic for this prompt's actual
+# shape: JSON-heavy (evidence package, COR analysis) and Danish text with
+# æ/ø/å, both of which tokenize less efficiently than plain English prose.
+# That gap also GROWS with input length — longer submissions pull in more
+# evidence/knowledge citations, so JSON overhead grows faster than a flat
+# char-count estimate assumes. A proportional buffer (not just a fixed
+# margin) is what actually keeps this safe across submission lengths.
+TOKEN_ESTIMATE_SAFETY_FACTOR = float(os.environ.get("GROQ_TOKEN_ESTIMATE_SAFETY_FACTOR", "1.35"))
 MIN_OUTPUT_TOKENS = int(os.environ.get("GROQ_MIN_OUTPUT_TOKENS", "400"))
 # low/medium/high — only applies to models that support it (gpt-oss family).
 # "low" leaves more of the token budget for the actual JSON output rather
@@ -588,21 +596,24 @@ Returner KUN gyldig JSON:
         before generation starts — not actual tokens used. Requesting more
         output than fits alongside the prompt fails immediately with a 413,
         regardless of how much the model would have actually generated.
-        This estimates prompt tokens (~4 chars/token, a standard rough rule
-        for English/Danish text) and clamps max_tokens so the two together
-        stay safely under GROQ_TPM_LIMIT, rather than relying on a fixed
-        constant that breaks the moment a prompt is bigger than usual.
+        The raw ~4 chars/token estimate is optimistic for this prompt's
+        JSON-heavy, Danish-text shape, and increasingly so on longer
+        submissions — TOKEN_ESTIMATE_SAFETY_FACTOR inflates the estimate
+        proportionally (not just a fixed margin) so this stays safe as
+        submissions get longer, not just for the typical/short case.
         """
-        estimated_prompt_tokens = (len(system) + len(user)) // 4
+        raw_estimate = (len(system) + len(user)) / 4
+        estimated_prompt_tokens = int(raw_estimate * TOKEN_ESTIMATE_SAFETY_FACTOR)
         available = GROQ_TPM_LIMIT - estimated_prompt_tokens - TPM_SAFETY_MARGIN
         clamped = max(MIN_OUTPUT_TOKENS, min(requested_max_tokens, available))
         if clamped < requested_max_tokens:
             logger.warning(
                 "max_tokens clamped for model=%s: requested=%d estimated_prompt_tokens=%d "
-                "tpm_limit=%d -> using=%d. If this fires often, either the prompt is "
-                "unusually large or GROQ_TPM_LIMIT needs raising (e.g. after upgrading "
-                "to Groq's Developer tier).",
-                model, requested_max_tokens, estimated_prompt_tokens, GROQ_TPM_LIMIT, clamped,
+                "(raw_char_estimate=%d, safety_factor=%.2f) tpm_limit=%d -> using=%d. "
+                "If this fires often, either prompts are unusually large or GROQ_TPM_LIMIT "
+                "needs raising (e.g. after upgrading to Groq's Developer tier).",
+                model, requested_max_tokens, estimated_prompt_tokens,
+                int(raw_estimate), TOKEN_ESTIMATE_SAFETY_FACTOR, GROQ_TPM_LIMIT, clamped,
             )
         return clamped
 
