@@ -349,7 +349,11 @@ sentence_scan er en obligatorisk, systematisk gennemgang, du skal udfylde FØR r
 - stavning_ok: sæt til false ved stavefejl.
 Brug denne gennemgang som grundlag for 'errors' — enhver sætning markeret false i et af felterne bør normalt give anledning til en tilsvarende fejlpost, medmindre du ved nærmere eftersyn vurderer, at der alligevel ikke er en fejl.
 
-Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig JSON:
+Foretag analysen internt. Returner ikke skjult ræsonnement.
+
+VIGTIGT: Alt tekstindhold du skriver skal være på ENGELSK — ikke dansk, og ikke en bogstavelig oversættelse, men naturligt formuleret engelsk. Dette gælder feedback, examiner_summary, dimension_reasons, strengths, improvements, og hver fejls "explanation". Eksempler og fejltekst kopieret direkte fra selve besvarelsen (fx "original", "correction", "line_text") skal naturligvis forblive på dansk, da det er kandidatens egen tekst.
+
+Returner KUN gyldig JSON:
 {{
   "sentence_scan": [
     {{
@@ -365,9 +369,9 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
   "overall": 12,
   "pass_fail": "PASSED|NOT PASSED",
   "dimension_reasons": {{
-    "pragmatisk": "konkret begrundelse med tekstnær evidens",
-    "diskursiv": "konkret begrundelse med tekstnær evidens",
-    "lingvistisk": "konkret begrundelse med tekstnær evidens"
+    "pragmatisk": "concrete reasoning with evidence from the text, in English",
+    "diskursiv": "concrete reasoning with evidence from the text, in English",
+    "lingvistisk": "concrete reasoning with evidence from the text, in English"
   }},
   "task_coverage": [
     {{
@@ -376,10 +380,10 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
       "evidence": "kort ordret tekstbid eller tom streng"
     }}
   ],
-  "strengths": ["konkret styrke"],
-  "improvements": ["konkret forbedringspunkt"],
-  "feedback_da": "2-4 konkrete sætninger til kandidaten",
-  "examiner_summary": "1-3 korte sætninger med konkret samlet begrundelse",
+  "strengths": ["concrete strength, in English"],
+  "improvements": ["concrete improvement, in English"],
+  "feedback": "2-4 concrete sentences to the candidate, in English",
+  "examiner_summary": "1-3 short sentences with concrete overall reasoning, in English",
   "errors": [
     {{
       "original": "eksakt tekst fra besvarelsen",
@@ -387,8 +391,7 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
       "type": "spelling|morphology|inversion|syntax|agreement|punctuation|word_choice|missing_word|other",
       "severity": "low|medium|high",
       "grammar_rule_title": "kort navn på reglen eller null",
-      "explanation_da": "kort forklaring",
-      "explanation_en": "short explanation"
+      "explanation": "short explanation, in English"
     }}
   ],
   "knowledge_used": [
@@ -753,7 +756,7 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
 
         errors = validated_errors_full[:MAX_ERRORS[levels["lingvistisk"]]]
 
-        feedback = str(raw.get("feedback_da", "")).strip() or "Ingen feedback tilgængelig."
+        feedback = str(raw.get("feedback", "")).strip() or "No feedback available."
         summary = str(raw.get("examiner_summary", "")).strip()
         if not summary:
             summary = feedback
@@ -768,7 +771,7 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
             rubrik=RubricScores(**levels),
             overall=grade,
             pass_fail=pass_fail,
-            feedback_da=feedback[:2000],
+            feedback=feedback[:2000],
             examiner_summary=summary[:1200],
             dimension_reasons=dimension_reasons,
             task_coverage=task_coverage,
@@ -950,9 +953,8 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
                 continue
             original = str(item.get("original", "")).strip()
             correction = str(item.get("correction", "")).strip()
-            explanation_da = str(item.get("explanation_da", "")).strip()
-            explanation_en = str(item.get("explanation_en", "")).strip()
-            if not original or not correction or not explanation_da or not explanation_en:
+            explanation = str(item.get("explanation", "")).strip()
+            if not original or not correction or not explanation:
                 rejected_incomplete += 1
                 continue
 
@@ -1011,8 +1013,7 @@ Foretag analysen internt. Returner ikke skjult ræsonnement. Returner KUN gyldig
                 correction=correction,
                 type=error_type,
                 severity=severity,
-                explanation_da=explanation_da,
-                explanation_en=explanation_en,
+                explanation=explanation,
                 line=line,
                 column_start=column_start,
                 column_end=column_end,
