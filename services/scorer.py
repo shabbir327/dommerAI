@@ -606,8 +606,24 @@ Returner KUN gyldig JSON:
         fine. extra_body bypasses that client-side validation and merges
         straight into the raw JSON request body.
         """
-        if provider.lower() == "groq" and "gpt-oss" in model:
+        if provider.lower() != "groq":
+            return {}
+        if "gpt-oss" in model:
             return {"extra_body": {"reasoning_effort": effort, "include_reasoning": False}}
+        if "qwen" in model:
+            # Qwen models on Groq default to "thinking mode" (reasoning_effort
+            # unset ≈ "default") if not told otherwise — this can burn
+            # thousands of hidden reasoning tokens before ever writing the
+            # actual JSON answer, causing exactly the truncated/empty
+            # 'failed_generation' error we saw. "none" forces direct,
+            # non-thinking output, which is what a structured grading/
+            # detection task needs — not open-ended reasoning traces.
+            # NOTE: Qwen's accepted values are "default"/"none", NOT
+            # gpt-oss's "low"/"medium"/"high" — the `effort` param passed in
+            # is ignored here on purpose; Qwen always gets "none" for our
+            # use case regardless of what GRADING/INTERN_REASONING_EFFORT is
+            # set to (those env vars only make sense for gpt-oss).
+            return {"extra_body": {"reasoning_effort": "none"}}
         return {}
 
     @staticmethod
