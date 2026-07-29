@@ -349,6 +349,8 @@ sentence_scan er en obligatorisk, systematisk gennemgang, du skal udfylde FØR r
 - stavning_ok: sæt til false ved stavefejl.
 Brug denne gennemgang som grundlag for 'errors' — enhver sætning markeret false i et af felterne bør normalt give anledning til en tilsvarende fejlpost, medmindre du ved nærmere eftersyn vurderer, at der alligevel ikke er en fejl.
 
+KONSISTENSTJEK (obligatorisk, udfør FØR du returnerer JSON'en): Gennemgå din egen 'dimension_reasons' og 'feedback' tekst. Hvis du dér nævner eller citerer et konkret ord/udtryk som en fejl (fx "boer", "et softwareingeniør", "arbejde" i stedet for "arbejder"), SKAL det samme ord/udtryk også findes som en selvstændig post i 'errors' — du må ikke omtale en fejl i prosa uden også at rapportere den strukturbaseret. Omvendt må 'errors' heller ikke indeholde noget, der modsiger din egen prosa-vurdering. Antallet af poster i 'errors' skal svare til antallet af distinkte fejl, du selv nævner på tværs af 'dimension_reasons' og 'feedback' — ikke et delmængde af dem.
+
 Foretag analysen internt. Returner ikke skjult ræsonnement.
 
 VIGTIGT: Alt tekstindhold du skriver skal være på ENGELSK — ikke dansk, og ikke en bogstavelig oversættelse, men naturligt formuleret engelsk. Dette gælder feedback, examiner_summary, dimension_reasons, strengths, improvements, og hver fejls "explanation". Eksempler og fejltekst kopieret direkte fra selve besvarelsen (fx "original", "correction", "line_text") skal naturligvis forblive på dansk, da det er kandidatens egen tekst.
