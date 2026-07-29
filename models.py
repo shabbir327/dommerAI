@@ -69,8 +69,7 @@ class InlineError(BaseModel):
     original: str
     correction: str
     type: ErrorType
-    explanation_da: str
-    explanation_en: str
+    explanation: str
     severity: ErrorSeverity = "medium"
     line: int = Field(..., ge=1, description="1-based line number")
     column_start: int = Field(..., ge=1, description="1-based start column")
@@ -110,7 +109,7 @@ class WebhookPayload(BaseModel):
     rubrik: Optional[RubricScores] = None
     overall: Optional[Grade] = None
     pass_fail: Optional[PassFail] = None
-    feedback_da: Optional[str] = None
+    feedback: Optional[str] = None
     examiner_summary: Optional[str] = None
     dimension_reasons: Optional[dict[str, str]] = None
     task_coverage: Optional[list[dict[str, str]]] = None
@@ -167,6 +166,13 @@ class PosTaggerHealth(BaseModel):
     model: Optional[str] = None
 
 
+class ModelReachability(BaseModel):
+    model: str
+    reachable: bool
+    latency_ms: Optional[float] = None
+    error: Optional[str] = None
+
+
 class HealthResponse(BaseModel):
     status: str
     app_version: str
@@ -181,6 +187,14 @@ class HealthResponse(BaseModel):
     pos_tagger: PosTaggerHealth
     knowledge_counts: dict[str, int] = Field(default_factory=dict)
     knowledge_sources: dict[str, KnowledgeSourceHealth] = Field(default_factory=dict)
+    groq_models: Optional[dict[str, ModelReachability]] = Field(
+        default=None,
+        description=(
+            "Only populated when /health is called with ?verify_models=true. "
+            "Performs a real, minimal live call to each Groq model (grading + "
+            "intern) to confirm the API key can actually reach it right now."
+        ),
+    )
 
 
 class EvaluationListResponse(BaseModel):
