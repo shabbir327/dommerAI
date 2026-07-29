@@ -372,6 +372,8 @@ KONSISTENSTJEK (obligatorisk før du returnerer JSON'en): Ethvert ord/udtryk du 
 
 VIGTIGT: Alt tekstindhold skal være på ENGELSK (naturligt formuleret, ikke ordret oversat) — gælder feedback, examiner_summary, dimension_reasons, strengths, improvements, og hver fejls "explanation". Tekst kopieret direkte fra besvarelsen ('original', 'correction', 'line_text') forbliver på dansk.
 
+GYLDIG JSON-SYNTAKS: Ethvert felt, der forventer én streng (fx 'evidence', 'grammar_rule_title'), skal have PRÆCIST én streng som værdi. Hvis du vil nævne flere eksempler, vælg det bedste ene, eller brug et array-felt, hvis skemaet tilbyder det (fx 'strengths', 'improvements') — skriv ALDRIG flere kommaseparerede strenge efter én nøgle, det ugyldiggør JSON'en.
+
 Returner KUN gyldig JSON:
 {{
   "sentence_scan": [
@@ -396,7 +398,7 @@ Returner KUN gyldig JSON:
     {{
       "requirement": "kort gengivelse af delopgaven",
       "status": "fulfilled|partial|missing",
-      "evidence": "kort ordret tekstbid eller tom streng"
+      "evidence": "ÉN kort ordret tekstbid eller tom streng — ALDRIG flere kommaseparerede tekststykker; vælg det mest repræsentative citat"
     }}
   ],
   "strengths": ["concrete strength, in English"],
