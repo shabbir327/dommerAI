@@ -75,7 +75,18 @@ INTERN_MAX_OUTPUT_TOKENS = int(os.environ.get("GROQ_INTERN_MAX_OUTPUT_TOKENS", "
 # both gpt-oss models today — raise this via env var once/if you move to
 # Groq's Developer tier (roughly 10x higher TPM), so this stops clamping
 # unnecessarily once you have real headroom.
+#
+# IMPORTANT: this ceiling is provider-specific, not universal. When grading
+# or intern points at a different provider (Mistral, Together, etc.) via
+# LLM_GRADING_BASE_URL/LLM_INTERN_BASE_URL, that provider almost certainly
+# has a DIFFERENT real TPM limit than Groq's 8000 — applying Groq's number
+# to it is a guess, not a fact, and can clamp far more aggressively than
+# actually necessary (or not aggressively enough). Set LLM_GRADING_TPM_LIMIT
+# / LLM_INTERN_TPM_LIMIT to that provider's real limit once you know it;
+# both fall back to GROQ_TPM_LIMIT if unset, which is only correct for Groq.
 GROQ_TPM_LIMIT = int(os.environ.get("GROQ_TPM_LIMIT", "8000"))
+GRADING_TPM_LIMIT = int(os.environ.get("LLM_GRADING_TPM_LIMIT", str(GROQ_TPM_LIMIT)))
+INTERN_TPM_LIMIT = int(os.environ.get("LLM_INTERN_TPM_LIMIT", str(GROQ_TPM_LIMIT)))
 TPM_SAFETY_MARGIN = int(os.environ.get("GROQ_TPM_SAFETY_MARGIN", "600"))
 # The ~4 chars/token rule of thumb is optimistic for this prompt's actual
 # shape: JSON-heavy (evidence package, COR analysis) and Danish text with
@@ -178,6 +189,7 @@ class Scorer:
                 model=GROQ_GRADING_MODEL,
                 client=self.grading_client,
                 provider=GRADING_PROVIDER,
+                tpm_limit=GRADING_TPM_LIMIT,
                 reasoning_effort=GRADING_REASONING_EFFORT,
             )
             return self._build_payload(
@@ -294,6 +306,7 @@ Returner KUN gyldig JSON i dette format:
                 model=GROQ_INTERN_MODEL,
                 client=self.intern_client,
                 provider=INTERN_PROVIDER,
+                tpm_limit=INTERN_TPM_LIMIT,
                 temperature=INTERN_TEMPERATURE,
                 reasoning_effort=INTERN_REASONING_EFFORT,
             )
@@ -629,29 +642,37 @@ Returner KUN gyldig JSON:
         return {}
 
     @staticmethod
-    def _clamp_max_tokens(system: str, user: str, requested_max_tokens: int, model: str) -> int:
-        """Groq's TPM limit is checked against (prompt tokens + max_tokens)
-        before generation starts — not actual tokens used. Requesting more
-        output than fits alongside the prompt fails immediately with a 413,
+    def _clamp_max_tokens(
+        system: str, user: str, requested_max_tokens: int, model: str, tpm_limit: int
+    ) -> int:
+        """A provider's TPM limit is checked against (prompt tokens +
+        max_tokens) before generation starts — not actual tokens used.
+        Requesting more output than fits alongside the prompt fails
+        immediately (413) or gets silently truncated (400/invalid JSON),
         regardless of how much the model would have actually generated.
         The raw ~4 chars/token estimate is optimistic for this prompt's
         JSON-heavy, Danish-text shape, and increasingly so on longer
         submissions — TOKEN_ESTIMATE_SAFETY_FACTOR inflates the estimate
         proportionally (not just a fixed margin) so this stays safe as
         submissions get longer, not just for the typical/short case.
+
+        tpm_limit is passed in per-call rather than read from one shared
+        global, since grading and intern can each be on a different
+        provider with a genuinely different real TPM ceiling.
         """
         raw_estimate = (len(system) + len(user)) / 4
         estimated_prompt_tokens = int(raw_estimate * TOKEN_ESTIMATE_SAFETY_FACTOR)
-        available = GROQ_TPM_LIMIT - estimated_prompt_tokens - TPM_SAFETY_MARGIN
+        available = tpm_limit - estimated_prompt_tokens - TPM_SAFETY_MARGIN
         clamped = max(MIN_OUTPUT_TOKENS, min(requested_max_tokens, available))
         if clamped < requested_max_tokens:
             logger.warning(
                 "max_tokens clamped for model=%s: requested=%d estimated_prompt_tokens=%d "
                 "(raw_char_estimate=%d, safety_factor=%.2f) tpm_limit=%d -> using=%d. "
-                "If this fires often, either prompts are unusually large or GROQ_TPM_LIMIT "
-                "needs raising (e.g. after upgrading to Groq's Developer tier).",
+                "If this fires often for a non-Groq provider, its real TPM limit is "
+                "probably different from GROQ_TPM_LIMIT — set LLM_GRADING_TPM_LIMIT / "
+                "LLM_INTERN_TPM_LIMIT to that provider's actual limit instead of guessing.",
                 model, requested_max_tokens, estimated_prompt_tokens,
-                int(raw_estimate), TOKEN_ESTIMATE_SAFETY_FACTOR, GROQ_TPM_LIMIT, clamped,
+                int(raw_estimate), TOKEN_ESTIMATE_SAFETY_FACTOR, tpm_limit, clamped,
             )
         return clamped
 
@@ -663,10 +684,11 @@ Returner KUN gyldig JSON:
         model: str,
         client: AsyncOpenAI,
         provider: str,
+        tpm_limit: int,
         temperature: float = TEMPERATURE,
         reasoning_effort: str = "low",
     ) -> dict:
-        max_tokens = self._clamp_max_tokens(system, user, max_tokens, model)
+        max_tokens = self._clamp_max_tokens(system, user, max_tokens, model, tpm_limit)
         last_error: Optional[Exception] = None
         for attempt in range(1, MAX_RETRIES + 1):
             try:
