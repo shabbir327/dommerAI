@@ -41,19 +41,34 @@ class MockProgressStore:
         request_dict: dict[str, Any],
     ) -> dict[str, Any]:
         """Stores this half's raw request under mock_id, returns the full
-        current row (both halves, whichever are present so far)."""
+        current row (both halves, whichever are present so far).
+
+        Checks Supabase before assuming a mock_id absent from the in-memory
+        cache is genuinely new. This matters specifically because Del 1 and
+        Del 2 of a real PD3/PD2 mock can arrive days apart — long enough for
+        Render to restart the process at least once in between (a redeploy,
+        or a free/hobby-tier dyno spinning down from inactivity), which wipes
+        self._items completely. Without this check, Del 2 arriving on a
+        fresh process would look like the start of a brand-new mock, and the
+        upsert below would silently overwrite Del 1's real, already-persisted
+        answer with null — a correctness bug, not just a missed cache hit.
+        """
         now = datetime.now(timezone.utc).isoformat()
         with self._lock:
-            row = dict(self._items.get(mock_id, {
+            row = self._items.get(mock_id)
+        if row is None:
+            row = self._load_from_supabase(mock_id) or {
                 "mock_id": mock_id,
                 "exam_type": exam_type,
                 "del1": None,
                 "del2": None,
                 "final_eval_id": None,
                 "created_at": now,
-            }))
-            row[part] = request_dict
-            row["updated_at"] = now
+            }
+        row = dict(row)
+        row[part] = request_dict
+        row["updated_at"] = now
+        with self._lock:
             self._items[mock_id] = row
 
         if self.persist_enabled and self.client is not None:
@@ -76,12 +91,7 @@ class MockProgressStore:
                 )
         return row
 
-    def get(self, mock_id: str) -> dict[str, Any] | None:
-        with self._lock:
-            item = self._items.get(mock_id)
-            if item is not None:
-                return dict(item)
-
+    def _load_from_supabase(self, mock_id: str) -> dict[str, Any] | None:
         if not self.persist_enabled or self.client is None:
             return None
         try:
@@ -100,6 +110,13 @@ class MockProgressStore:
                 mock_id, exc,
             )
             return None
+
+    def get(self, mock_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            item = self._items.get(mock_id)
+            if item is not None:
+                return dict(item)
+        return self._load_from_supabase(mock_id)
 
     def mark_completed(self, mock_id: str, final_eval_id: str) -> None:
         now = datetime.now(timezone.utc).isoformat()

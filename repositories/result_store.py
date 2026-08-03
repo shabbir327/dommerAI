@@ -164,7 +164,7 @@ class EvaluationResultStore:
             "pass_fail", "feedback", "examiner_summary", "errors", "word_count",
             "writing_statistics", "knowledge_used", "retrieval_metadata",
             "model_metadata", "error", "submitted_at", "started_at", "completed_at",
-            "created_at", "updated_at", "result_json",
+            "created_at", "updated_at", "result_json", "del1", "del2",
         }
         return self._columns
 
@@ -198,6 +198,8 @@ class EvaluationResultStore:
             "retrieval_metadata": stored.get("retrieval_metadata"),
             "model_metadata": stored.get("model_metadata"),
             "error": stored.get("error"),
+            "del1": stored.get("del1"),
+            "del2": stored.get("del2"),
         }
 
         # Backwards compatibility when a result_json JSONB column exists.
