@@ -606,28 +606,34 @@ Returner KUN gyldig JSON:
 
     @staticmethod
     def _reasoning_kwargs(model: str, effort: str, provider: str) -> dict[str, Any]:
-        """reasoning_effort/include_reasoning are Groq-specific controls for
-        the gpt-oss family — other providers serving the same model (Together
-        AI, Fireworks, Cerebras, Mistral, etc.) may not support these fields
-        at all, so only attach them when actually talking to Groq for that
-        role. Grading and intern can each be on a different provider, so this
+        """reasoning_effort/include_reasoning are native gpt-oss/Qwen model
+        parameters, not Groq-specific controls — Together AI's own GPT-OSS
+        docs explicitly recommend setting reasoning_effort and note it
+        defaults to "medium" if left unset. Since our whole "low" setting
+        exists to leave headroom in max_tokens for actual JSON output
+        instead of hidden reasoning tokens, skipping this on non-Groq
+        providers would silently reintroduce the same truncation failure
+        mode we already fixed for Groq — just via a different mechanism
+        (unset effort defaulting higher, instead of TPM starvation).
+        So this is attached for gpt-oss/Qwen regardless of provider.
+        Grading and intern can each be on a different provider, so this
         is checked per-call, not from one shared global.
 
         These are passed via extra_body, not as direct keyword arguments:
-        Groq's own SDK accepted arbitrary custom params directly, but the
-        generic openai SDK validates kwargs against its own fixed signature
-        and raises a client-side TypeError for anything it doesn't
-        recognize — even though Groq's actual REST API accepts these fields
-        fine. extra_body bypasses that client-side validation and merges
-        straight into the raw JSON request body.
+        the generic openai SDK validates kwargs against its own fixed
+        signature and raises a client-side TypeError for anything it
+        doesn't recognize — even though the actual REST API on Groq,
+        Together, etc. all accept these fields fine. extra_body bypasses
+        that client-side validation and merges straight into the raw JSON
+        request body. This is a client-library detail, not a
+        provider-specific one, so it applies the same way everywhere.
         """
-        if provider.lower() != "groq":
-            return {}
         if "gpt-oss" in model:
             return {"extra_body": {"reasoning_effort": effort, "include_reasoning": False}}
         if "qwen" in model:
-            # Qwen models on Groq default to "thinking mode" (reasoning_effort
-            # unset ≈ "default") if not told otherwise — this can burn
+            # Qwen models default to "thinking mode" (reasoning_effort
+            # unset ≈ "default") if not told otherwise, regardless of
+            # provider — this can burn
             # thousands of hidden reasoning tokens before ever writing the
             # actual JSON answer, causing exactly the truncated/empty
             # 'failed_generation' error we saw. "none" forces direct,
