@@ -14,9 +14,10 @@ from models import (
     ScorerHealth,
 )
 from services.scorer import (
+    GRADING_PROVIDER,
     GROQ_GRADING_MODEL,
     GROQ_INTERN_MODEL,
-    LLM_PROVIDER,
+    INTERN_PROVIDER,
     PROMPT_VERSION,
 )
 
@@ -90,7 +91,8 @@ async def health() -> HealthResponse:
         scorer=ScorerHealth(
             status="ready" if scorer_ready else "unavailable",
             ready=scorer_ready,
-            provider=LLM_PROVIDER if scorer_ready else None,
+            provider=GRADING_PROVIDER if scorer_ready else None,
+            intern_provider=INTERN_PROVIDER if scorer_ready else None,
             model=GROQ_GRADING_MODEL if scorer_ready else None,
             intern_model=GROQ_INTERN_MODEL if scorer_ready else None,
             prompt_version=PROMPT_VERSION if scorer_ready else None,
