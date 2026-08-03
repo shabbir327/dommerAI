@@ -8,8 +8,20 @@ ExamLevel = Literal["PD2", "PD3"]
 RubricLevel = Literal["Top", "Midt", "Bund", "Under niveau"]
 Grade = Literal[12, 10, 7, 4, 2, 0, -3]
 PassFail = Literal["PASSED", "NOT PASSED"]
-SubmissionStatus = Literal["pending", "scored", "failed"]
+SubmissionStatus = Literal["pending", "scored", "failed", "awaiting_other_part"]
 WebhookSource = Literal["request", "environment", "none"]
+# "single" — existing behaviour, one question/answer graded on the full -3..12
+#   scale. Every test run so far (PD2/PD3 test suites, ground-truth checks).
+# "mock"   — one half (Del 1 or Del 2) of a full PD2/PD3 mock test. Graded
+#   individually, but the official -3..12 grade is only produced once BOTH
+#   halves have arrived — see services/evaluation_service.handle_mock_submission.
+#   Deliberately does not grade an abandoned single-part mock, to avoid
+#   burning LLM calls on a submission the real exam wouldn't grade anyway.
+# "practice" — a standalone drill exercise (e.g. Hejdansk's Writing Correction
+#   tool). Lighter feedback, no official grade scale — see Scorer.score's
+#   practice-mode branch.
+SubmissionMode = Literal["single", "mock", "practice"]
+DelprovePart = Literal["del1", "del2"]
 ErrorType = Literal[
     "spelling",
     "morphology",
@@ -31,6 +43,20 @@ class EvaluationRequest(BaseModel):
 
     eval_id: str = Field(..., min_length=1, examples=["pd2-test-001"])
     exam_type: ExamLevel
+    submission_mode: SubmissionMode = "single"
+    mock_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Required when submission_mode='mock'. Correlates Del 1 and Del 2 "
+            "of the same mock test attempt — grading only fires once both "
+            "parts sharing this mock_id have arrived."
+        ),
+        examples=["mock-pd3-8f2a1c"],
+    )
+    delprove_part: Optional[DelprovePart] = Field(
+        default=None,
+        description="Required when submission_mode='mock'. Which half of the mock this is.",
+    )
     question: str = Field(..., min_length=1)
     question_description: Optional[str] = None
     answer: str = Field(..., min_length=1)
@@ -49,6 +75,19 @@ class EvaluationRequest(BaseModel):
         value = value.strip()
         if not value:
             raise ValueError("value cannot be empty")
+        return value
+
+    @field_validator("delprove_part")
+    @classmethod
+    def mock_requires_part_and_id(cls, value: Optional[str], info) -> Optional[str]:
+        # Pydantic v2 validates fields in declaration order, so mock_id has
+        # already been parsed onto info.data by the time this runs.
+        mode = info.data.get("submission_mode")
+        mock_id = info.data.get("mock_id")
+        if mode == "mock" and (not value or not mock_id):
+            raise ValueError(
+                "submission_mode='mock' requires both mock_id and delprove_part."
+            )
         return value
 
 

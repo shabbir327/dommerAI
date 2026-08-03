@@ -17,6 +17,7 @@ from api.system import router as system_router
 from app_state import state
 from config import APP_VERSION, DEFAULT_WEBHOOK_URL, LOG_LEVEL, cors_origins
 from repositories.knowledge_repository import KnowledgeRepository
+from repositories.mock_progress_repository import MockProgressStore
 from repositories.result_store import EvaluationResultStore
 from services.examiner_knowledge import ExaminerKnowledgeEngine
 from services.lexical_engine import LexicalEngine
@@ -48,6 +49,7 @@ async def lifespan(app: FastAPI):
 
     state.scorer = Scorer(examiner_engine, state.lexical_engine)
     state.result_store = EvaluationResultStore(state.repository.client)
+    state.mock_progress = MockProgressStore(state.repository.client)
 
     logger.info(
         "Dommer ready — knowledge=%s grammar_hub=%s default_webhook=%s pos_tagger=%s",
@@ -68,7 +70,13 @@ app = FastAPI(
     title="Dommer — DanskProeve Writing Evaluator",
     description=(
         "Knowledge-grounded PD2/PD3 evaluator with exact inline grammar locations, "
-        "webhook delivery, result polling, and DanskGrammatik Hub lexical services."
+        "webhook delivery, result polling, and DanskGrammatik Hub lexical services. "
+        "POST /evaluate supports three submission_mode values — try the example "
+        "dropdown on that endpoint: 'single' (default, one question/answer graded "
+        "on the -3..12 scale), 'mock' (Del 1 + Del 2 of a full PD2/PD3 mock test, "
+        "sent as two calls sharing a mock_id — grading only fires once both "
+        "arrive), and 'practice' (standalone drill exercises — pass/fail with "
+        "full inline error detail, no official grade)."
     ),
     version=APP_VERSION,
     lifespan=lifespan,
