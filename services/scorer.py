@@ -192,9 +192,12 @@ class Scorer:
                 tpm_limit=GRADING_TPM_LIMIT,
                 reasoning_effort=GRADING_REASONING_EFFORT,
             )
-            return self._build_payload(
+            payload = self._build_payload(
                 raw, request, word_count, evidence, lexical_analysis, candidate_errors
             )
+            if request.submission_mode == "practice":
+                payload = self._simplify_for_practice(payload)
+            return payload
         except Exception as exc:
             logger.exception("Scoring failed for eval_id=%s", request.eval_id)
             return WebhookPayload(
@@ -1316,6 +1319,127 @@ Returner KUN gyldig JSON:
 
         reason = " ".join(reasons) if reasons else None
         return sanitized, reason
+
+    @staticmethod
+    def _simplify_for_practice(payload: WebhookPayload) -> WebhookPayload:
+        """Standalone drill exercises (e.g. Hejdansk's Writing Correction
+        tool) aren't exam mocks — they're short, low-stakes practice reps
+        (30-70 words, per the platform's own UI), and putting them on the
+        official -3..12 exam scale would be both misleading (that scale is
+        calibrated for full exam-length, exam-register writing) and needless
+        token/latency cost for something meant to be quick feedback.
+
+        Reuses the exact same error-detection/COR-grounded grading pass —
+        only the framing changes: no rubrik, no numeric grade. Pass/fail
+        becomes "no unresolved high-severity error" instead of a mapped
+        grade, since a single glaring V2/agreement error is a more useful
+        practice-mode signal than a projected exam-scale number would be.
+        """
+        has_high_severity = any(
+            error.severity == "high" for error in (payload.errors or [])
+        )
+        return payload.model_copy(update={
+            "rubrik": None,
+            "overall": None,
+            "pass_fail": "NOT PASSED" if has_high_severity else "PASSED",
+        })
+
+    @staticmethod
+    def combine_mock_grades(
+        del1_payload: Optional[WebhookPayload],
+        del2_payload: Optional[WebhookPayload],
+    ) -> dict[str, Any]:
+        """Combines two independently-graded delprøver into one official
+        mock-test result, per the rules stated explicitly in both the PD2
+        (April 2025) and PD3 (August 2024) bedømmelsesvejledninger:
+
+          - Del 2 only (Del 1 never submitted/empty): dock one grade step
+            down GRADE_SCALE from Del 2's own grade. ("Hvis kun delprøve 2 er
+            besvaret, trækker det forlods en karakter ned" — PD3; "gives der
+            forlods et fradrag på en karakter" — PD2. Same rule, same wording.)
+          - Del 1 only (Del 2 never submitted/empty): cannot pass — capped at
+            0 or -3. Both guides only say "kan kun karakteren 00 eller -3
+            gives" without a hard rule for which, so this uses Del 1's own
+            rubric as the deciding signal: any 'Under niveau' dimension -> -3,
+            otherwise 0. This is the one place in this function that's an
+            approximation of qualitative guidance rather than a stated rule.
+          - Both present: Del 2 is explicitly "afgørende" (decisive) in both
+            guides, so Del 2's own guardrailed grade is the base. Both guides
+            single out one specific ambiguous zone — doubt between 00/02, or
+            between 02/4 — and say Del 1 quality should tip it ("en god
+            besvarelse af delprøve 1 kan tale for den højere karakter, mens en
+            dårligere besvarelse vil trække mod den lavere"). So: only when
+            Del 2's grade lands exactly on 0 or 2 does Del 1 get a vote,
+            nudging one GRADE_SCALE step up or down based on whether Del 1's
+            rubric is clean (no Bund/Under niveau) or not. Away from that
+            boundary, Del 2's grade stands as-is — the guides don't describe
+            censor discretion applying anywhere else.
+
+        Never asks an LLM to do this arithmetic — same reason the rest of
+        this file independently re-validates every LLM claim: a combination
+        rule with a specific, checkable definition belongs in code, not in
+        a model's judgment call repeated identically every time.
+        """
+        def rubric_is_clean(payload: WebhookPayload) -> bool:
+            if payload.rubrik is None:
+                return False
+            values = payload.rubrik.model_dump().values()
+            return "Bund" not in values and "Under niveau" not in values
+
+        def step(grade: int, direction: int) -> int:
+            idx = GRADE_SCALE.index(grade)
+            idx = max(0, min(len(GRADE_SCALE) - 1, idx + direction))
+            return GRADE_SCALE[idx]
+
+        del1_ok = del1_payload is not None and del1_payload.status == "scored"
+        del2_ok = del2_payload is not None and del2_payload.status == "scored"
+
+        if del2_ok and not del1_ok:
+            base = int(del2_payload.overall)
+            combined = step(base, -1)
+            reason = (
+                f"Del 1 was not answered — Del 2's grade ({base}) was docked "
+                f"one step to {combined}, per the essay-only rule."
+            )
+            rubrik = del2_payload.rubrik
+        elif del1_ok and not del2_ok:
+            combined = 0 if rubric_is_clean(del1_payload) else -3
+            reason = (
+                "Del 2 was not answered — cannot pass. Capped at "
+                f"{combined} based on Del 1's rubric quality."
+            )
+            rubrik = del1_payload.rubrik
+        elif del1_ok and del2_ok:
+            base = int(del2_payload.overall)
+            combined = base
+            reason = f"Del 2 ({base}) is decisive; no boundary nudge applied."
+            if base in (0, 2):
+                if rubric_is_clean(del1_payload):
+                    combined = step(base, +1)
+                    reason = (
+                        f"Del 2's grade ({base}) sat on the {'-3/0' if base == 0 else '00/02'} "
+                        f"boundary described in the guide; Del 1's clean rubric nudged it up to {combined}."
+                    )
+                else:
+                    reason = (
+                        f"Del 2's grade ({base}) sat on the boundary the guide describes; "
+                        f"Del 1's weaker rubric kept it at {combined} rather than nudging up."
+                    )
+            rubrik = del2_payload.rubrik
+        else:
+            combined = -3
+            reason = "Neither part was successfully scored."
+            rubrik = None
+
+        pass_fail = "PASSED" if combined >= PASS_THRESHOLD else "NOT PASSED"
+        return {
+            "overall": combined,
+            "pass_fail": pass_fail,
+            "rubrik": rubrik.model_dump() if rubrik is not None else None,
+            "combination_reason": reason,
+            "del1_result": del1_payload.model_dump(mode="json", exclude_none=True) if del1_payload else None,
+            "del2_result": del2_payload.model_dump(mode="json", exclude_none=True) if del2_payload else None,
+        }
 
     @staticmethod
     def _apply_grade_guardrails(

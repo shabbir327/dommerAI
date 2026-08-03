@@ -13,6 +13,86 @@ from models import EvaluationRequest, WebhookPayload
 logger = logging.getLogger("dommer.evaluation")
 
 
+async def store_mock_part(request: EvaluationRequest) -> bool:
+    """Synchronous, no LLM calls — just persists this half and reports
+    whether its pair has already arrived. Kept separate from the actual
+    grading so the API layer can return its 202 ack immediately either way,
+    same as the existing single-submission flow, instead of blocking the
+    request on up to four LLM calls when this happens to be the second half.
+    """
+    if state.mock_progress is None:
+        raise RuntimeError("Mock progress store is not initialised.")
+
+    row = state.mock_progress.save_part(
+        mock_id=request.mock_id,
+        exam_type=request.exam_type,
+        part=request.delprove_part,
+        request_dict=request.model_dump(mode="json", exclude_none=True),
+    )
+    other_part = "del2" if request.delprove_part == "del1" else "del1"
+    return row.get(other_part) is not None
+
+
+async def grade_and_combine_mock(mock_id: str, webhook_url: str | None) -> None:
+    """Runs as a background task once store_mock_part reports both halves
+    are present. Grades each half independently (own pragmatisk/diskursiv/
+    lingvistisk read, since an email and a formal essay have genuinely
+    different register expectations), then combines them deterministically
+    via Scorer.combine_mock_grades — never asks an LLM to do that arithmetic.
+    An abandoned single-part mock never reaches this function at all: no
+    LLM calls are spent on it, by design.
+    """
+    if state.mock_progress is None or state.scorer is None or state.result_store is None:
+        logger.error("Mock grading dependencies not ready — mock_id=%s", mock_id)
+        return
+
+    try:
+        row = state.mock_progress.get(mock_id)
+        if row is None:
+            logger.error("Mock progress row vanished — mock_id=%s", mock_id)
+            return
+
+        del1_payload = None
+        if row.get("del1") is not None:
+            del1_payload = await state.scorer.score(EvaluationRequest.model_validate(row["del1"]))
+
+        del2_payload = None
+        if row.get("del2") is not None:
+            del2_payload = await state.scorer.score(EvaluationRequest.model_validate(row["del2"]))
+
+        combined = state.scorer.combine_mock_grades(del1_payload, del2_payload)
+
+        final_payload = WebhookPayload(
+            eval_id=mock_id,
+            status="scored",
+            rubrik=combined["rubrik"],
+            overall=combined["overall"],
+            pass_fail=combined["pass_fail"],
+            feedback=(del2_payload.feedback if del2_payload else None)
+                or (del1_payload.feedback if del1_payload else None),
+            examiner_summary=combined["combination_reason"],
+            model_metadata={
+                "submission_mode": "mock",
+                "combination_reason": combined["combination_reason"],
+                "del1_result": combined["del1_result"],
+                "del2_result": combined["del2_result"],
+            },
+        )
+
+        state.result_store.save(final_payload.model_dump(mode="json", exclude_none=True))
+        state.mock_progress.mark_completed(mock_id, mock_id)
+
+        if webhook_url:
+            await fire_webhook(final_payload, webhook_url)
+    except Exception as exc:
+        logger.exception("Mock combination failed — mock_id=%s", mock_id)
+        state.result_store.save({
+            "eval_id": mock_id,
+            "status": "failed",
+            "error": str(exc),
+        })
+
+
 async def score_store_and_notify(
     request: EvaluationRequest,
     webhook_url: str | None,
