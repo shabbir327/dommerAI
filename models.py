@@ -145,6 +145,7 @@ class WebhookPayload(BaseModel):
 
     eval_id: str
     status: SubmissionStatus
+    exam_type: Optional[str] = None
     rubrik: Optional[RubricScores] = None
     overall: Optional[Grade] = None
     pass_fail: Optional[PassFail] = None
@@ -162,6 +163,23 @@ class WebhookPayload(BaseModel):
     model_metadata: Optional[dict[str, Any]] = None
     error: Optional[str] = None
     updated_at: Optional[str] = None
+    del1: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Only present for submission_mode='mock' combined results. Full "
+            "per-part result for Del 1 — including its own 'errors' with "
+            "line/char positions relative to Del 1's own answer text, not "
+            "Del 2's. Apply these against the Del 1 textarea specifically."
+        ),
+    )
+    del2: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Only present for submission_mode='mock' combined results. Same "
+            "shape as del1, but for Del 2 — its 'errors' positions are "
+            "relative to Del 2's own answer text."
+        ),
+    )
 
 
 class KnowledgeSourceHealth(BaseModel):
