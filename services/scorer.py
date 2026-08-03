@@ -203,6 +203,7 @@ class Scorer:
             return WebhookPayload(
                 eval_id=request.eval_id,
                 status="failed",
+                exam_type=request.exam_type,
                 word_count=word_count,
                 error=str(exc),
                 model_metadata={
@@ -852,6 +853,7 @@ Returner KUN gyldig JSON:
         return WebhookPayload(
             eval_id=request.eval_id,
             status="scored",
+            exam_type=request.exam_type,
             rubrik=RubricScores(**levels),
             overall=grade,
             pass_fail=pass_fail,

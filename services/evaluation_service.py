@@ -46,6 +46,7 @@ async def grade_and_combine_mock(mock_id: str, webhook_url: str | None) -> None:
         logger.error("Mock grading dependencies not ready — mock_id=%s", mock_id)
         return
 
+    row: dict | None = None
     try:
         row = state.mock_progress.get(mock_id)
         if row is None:
@@ -62,20 +63,34 @@ async def grade_and_combine_mock(mock_id: str, webhook_url: str | None) -> None:
 
         combined = state.scorer.combine_mock_grades(del1_payload, del2_payload)
 
+        del1_feedback = (del1_payload.feedback or "").strip() if del1_payload else ""
+        del2_feedback = (del2_payload.feedback or "").strip() if del2_payload else ""
+        if del1_feedback and del2_feedback:
+            combined_feedback = f"Del 1 (e-mail): {del1_feedback} Del 2 (skriftlig fremstilling): {del2_feedback}"
+        else:
+            combined_feedback = del2_feedback or del1_feedback or None
+
+        del1_summary = (del1_payload.examiner_summary or "").strip() if del1_payload else ""
+        del2_summary = (del2_payload.examiner_summary or "").strip() if del2_payload else ""
+        if del1_summary and del2_summary:
+            narrative_summary = f"Del 1 (e-mail): {del1_summary} Del 2 (skriftlig fremstilling): {del2_summary}"
+        else:
+            narrative_summary = del2_summary or del1_summary or combined["combination_reason"]
+
         final_payload = WebhookPayload(
             eval_id=mock_id,
             status="scored",
+            exam_type=row.get("exam_type"),
             rubrik=combined["rubrik"],
             overall=combined["overall"],
             pass_fail=combined["pass_fail"],
-            feedback=(del2_payload.feedback if del2_payload else None)
-                or (del1_payload.feedback if del1_payload else None),
-            examiner_summary=combined["combination_reason"],
+            feedback=combined_feedback[:2000] if combined_feedback else None,
+            examiner_summary=narrative_summary[:1200],
+            del1=combined["del1_result"],
+            del2=combined["del2_result"],
             model_metadata={
                 "submission_mode": "mock",
                 "combination_reason": combined["combination_reason"],
-                "del1_result": combined["del1_result"],
-                "del2_result": combined["del2_result"],
             },
         )
 
@@ -89,6 +104,7 @@ async def grade_and_combine_mock(mock_id: str, webhook_url: str | None) -> None:
         state.result_store.save({
             "eval_id": mock_id,
             "status": "failed",
+            "exam_type": row.get("exam_type") if row else None,
             "error": str(exc),
         })
 
@@ -114,6 +130,7 @@ async def score_store_and_notify(
         state.result_store.save({
             "eval_id": request.eval_id,
             "status": "failed",
+            "exam_type": request.exam_type,
             "error": str(exc),
         })
 
