@@ -176,6 +176,7 @@ class ScorerHealth(BaseModel):
     status: str
     ready: bool
     provider: Optional[str] = None
+    intern_provider: Optional[str] = None
     model: Optional[str] = None
     intern_model: Optional[str] = None
     prompt_version: Optional[str] = None
