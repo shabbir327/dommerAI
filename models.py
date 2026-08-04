@@ -146,6 +146,9 @@ class WebhookPayload(BaseModel):
     eval_id: str
     status: SubmissionStatus
     exam_type: Optional[str] = None
+    question: Optional[str] = None
+    question_description: Optional[str] = None
+    answer: Optional[str] = None
     rubrik: Optional[RubricScores] = None
     overall: Optional[Grade] = None
     pass_fail: Optional[PassFail] = None
