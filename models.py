@@ -110,6 +110,16 @@ class InlineError(BaseModel):
     type: ErrorType
     explanation: str
     severity: ErrorSeverity = "medium"
+    part: Optional[Literal["del1", "del2"]] = Field(
+        default=None,
+        description=(
+            "Only set for submission_mode='mock' results. Identifies which "
+            "delprøve this error's position (line/column/char offsets) is "
+            "relative to — del1's positions are meaningless applied against "
+            "del2's text and vice versa. Null for single/practice mode, "
+            "where there's only one answer text to position against."
+        ),
+    )
     line: int = Field(..., ge=1, description="1-based line number")
     column_start: int = Field(..., ge=1, description="1-based start column")
     column_end: int = Field(..., ge=1, description="1-based exclusive end column")
@@ -183,6 +193,21 @@ class WebhookPayload(BaseModel):
             "relative to Del 2's own answer text."
         ),
     )
+    del1_word_count: Optional[int] = Field(
+        default=None,
+        description=(
+            "Only present for submission_mode='mock'. Del 1's word count on "
+            "its own — deliberately kept separate from del2_word_count "
+            "rather than summed, since the two delprøver have different "
+            "word-count expectations (e.g. PD3 Del 1 has no strict minimum, "
+            "Del 2 has a 200-word minimum) and summing them would obscure "
+            "whether either one actually met its own requirement."
+        ),
+    )
+    del2_word_count: Optional[int] = Field(
+        default=None,
+        description="Only present for submission_mode='mock'. Del 2's word count on its own.",
+    )
 
 
 class KnowledgeSourceHealth(BaseModel):
@@ -252,7 +277,7 @@ class HealthResponse(BaseModel):
         default=None,
         description=(
             "Only populated when /health is called with ?verify_models=true. "
-            "Performs a real, minimal live call to each Groq model (grading + "
+            "Performs a real, minimal live call to each configured LLM (grading + "
             "intern) to confirm the API key can actually reach it right now."
         ),
     )
