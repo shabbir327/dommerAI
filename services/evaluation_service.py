@@ -63,6 +63,21 @@ async def grade_and_combine_mock(mock_id: str, webhook_url: str | None) -> None:
 
         combined = state.scorer.combine_mock_grades(del1_payload, del2_payload)
 
+        del1_raw = row.get("del1") or {}
+        del2_raw = row.get("del2") or {}
+
+        def _combine_field(field: str) -> str:
+            # evaluations.question/answer are NOT NULL — a combined mock
+            # result never had a "the submission" the way a single-mode one
+            # does, so this builds one from both halves rather than leaving
+            # either column null (which broke the write the same way
+            # exam_type's absence did before).
+            del1_value = str(del1_raw.get(field) or "").strip()
+            del2_value = str(del2_raw.get(field) or "").strip()
+            if del1_value and del2_value:
+                return f"DEL 1: {del1_value}\n\nDEL 2: {del2_value}"
+            return del2_value or del1_value or "(not answered)"
+
         del1_feedback = (del1_payload.feedback or "").strip() if del1_payload else ""
         del2_feedback = (del2_payload.feedback or "").strip() if del2_payload else ""
         if del1_feedback and del2_feedback:
@@ -81,6 +96,9 @@ async def grade_and_combine_mock(mock_id: str, webhook_url: str | None) -> None:
             eval_id=mock_id,
             status="scored",
             exam_type=row.get("exam_type"),
+            question=_combine_field("question"),
+            question_description=_combine_field("question_description"),
+            answer=_combine_field("answer"),
             rubrik=combined["rubrik"],
             overall=combined["overall"],
             pass_fail=combined["pass_fail"],
@@ -101,10 +119,14 @@ async def grade_and_combine_mock(mock_id: str, webhook_url: str | None) -> None:
             await fire_webhook(final_payload, webhook_url)
     except Exception as exc:
         logger.exception("Mock combination failed — mock_id=%s", mock_id)
+        del1_raw = (row.get("del1") if row else None) or {}
+        del2_raw = (row.get("del2") if row else None) or {}
         state.result_store.save({
             "eval_id": mock_id,
             "status": "failed",
             "exam_type": row.get("exam_type") if row else None,
+            "question": str(del1_raw.get("question") or del2_raw.get("question") or "(not answered)"),
+            "answer": str(del1_raw.get("answer") or del2_raw.get("answer") or "(not answered)"),
             "error": str(exc),
         })
 

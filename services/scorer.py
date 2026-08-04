@@ -205,6 +205,9 @@ class Scorer:
                 eval_id=request.eval_id,
                 status="failed",
                 exam_type=request.exam_type,
+                question=request.question,
+                question_description=request.question_description,
+                answer=request.answer,
                 word_count=word_count,
                 error=str(exc),
                 model_metadata={
@@ -722,16 +725,16 @@ Returner KUN gyldig JSON:
                     # or truncated. Surfacing this in logs makes that failure
                     # mode visible instead of looking like a normal response.
                     logger.warning(
-                        "Groq response for model=%s hit finish_reason=length "
+                        "%s response for model=%s hit finish_reason=length "
                         "(max_tokens=%d) — output may be truncated/incomplete.",
-                        model, max_tokens,
+                        provider, model, max_tokens,
                     )
                 content = choice.message.content
                 if not content:
-                    raise RuntimeError("Groq returned an empty response.")
+                    raise RuntimeError(f"{provider} returned an empty response.")
                 parsed = json.loads(content)
                 if not isinstance(parsed, dict):
-                    raise RuntimeError("Groq response was not a JSON object.")
+                    raise RuntimeError(f"{provider} response was not a JSON object.")
                 # A response can be syntactically valid JSON (passes both
                 # checks above) while still being almost entirely empty of
                 # actual evaluation content — e.g. {"overall": 0} with no
@@ -750,7 +753,7 @@ Returner KUN gyldig JSON:
                 return parsed
             except Exception as exc:
                 last_error = exc
-                logger.warning("Groq attempt %d/%d failed: %s", attempt, MAX_RETRIES, exc)
+                logger.warning("%s attempt %d/%d failed: %s", provider, attempt, MAX_RETRIES, exc)
                 message = str(exc).lower()
                 # Retrying an oversized request cannot succeed until the TPM window
                 # changes, and it only adds latency. Fail immediately with a clear error.
@@ -758,7 +761,7 @@ Returner KUN gyldig JSON:
                     break
                 if attempt < MAX_RETRIES:
                     await asyncio.sleep(RETRY_DELAY * (2 ** (attempt - 1)))
-        raise RuntimeError(f"All {MAX_RETRIES} Groq attempts failed for model={model}: {last_error}")
+        raise RuntimeError(f"All {MAX_RETRIES} {provider} attempts failed for model={model}: {last_error}")
 
     @staticmethod
     def _grading_response_incomplete_reason(parsed: dict[str, Any]) -> Optional[str]:
@@ -891,6 +894,9 @@ Returner KUN gyldig JSON:
             eval_id=request.eval_id,
             status="scored",
             exam_type=request.exam_type,
+            question=request.question,
+            question_description=request.question_description,
+            answer=request.answer,
             rubrik=RubricScores(**levels),
             overall=grade,
             pass_fail=pass_fail,
@@ -1060,7 +1066,7 @@ Returner KUN gyldig JSON:
         gender_lookup: dict[str, str],
     ) -> list[InlineError]:
         if not isinstance(raw_errors, list):
-            logger.info("Groq returned no 'errors' list at all (raw type=%s)", type(raw_errors).__name__)
+            logger.info("Grading model returned no 'errors' list at all (raw type=%s)", type(raw_errors).__name__)
             return []
 
         raw_count = len(raw_errors)
@@ -1519,6 +1525,19 @@ Returner KUN gyldig JSON:
         elif "Top" not in values and adjusted > 7:
             adjusted = 7
             reason = "No dimension was Top, so the grade was capped at 7."
+
+        # The above only guards the floor ("at least one Top to clear 7") —
+        # nothing previously stopped a single Top (often pragmatisk, the
+        # easiest dimension: did you follow instructions/hit the word count)
+        # from carrying a 10 even when the two harder dimensions (diskursiv,
+        # lingvistisk — actual language quality) were both only Midt. Grade
+        # 10 ("Fortrinlig" — "nogle mindre væsentlige mangler", i.e. only
+        # MINOR shortcomings) shouldn't be reachable off one Top out of
+        # three; this brings 10 in line with the same all/majority-Top
+        # philosophy the grade-12 rule above already uses.
+        if adjusted >= 10 and values.count("Top") < 2:
+            adjusted = 7
+            reason = "Grade 10+ requires at least two of three dimensions to be Top."
 
         normalised = min(GRADE_SCALE, key=lambda grade: abs(grade - adjusted))
         return normalised, reason  # type: ignore[return-value]
