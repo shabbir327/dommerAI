@@ -94,7 +94,7 @@ async def grade_and_combine_mock(mock_id: str, webhook_url: str | None) -> None:
 
         final_payload = WebhookPayload(
             eval_id=mock_id,
-            status="scored",
+            status=combined.get("status", "scored"),
             exam_type=row.get("exam_type"),
             question=_combine_field("question"),
             question_description=_combine_field("question_description"),
@@ -104,6 +104,7 @@ async def grade_and_combine_mock(mock_id: str, webhook_url: str | None) -> None:
             pass_fail=combined["pass_fail"],
             feedback=combined_feedback[:2000] if combined_feedback else None,
             examiner_summary=narrative_summary[:1200],
+            error=combined["combination_reason"] if combined.get("status") == "failed" else None,
             del1=combined["del1_result"],
             del2=combined["del2_result"],
             model_metadata={

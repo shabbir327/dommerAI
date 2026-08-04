@@ -751,6 +751,18 @@ Returner KUN gyldig JSON:
                 if completeness_check is not None:
                     problem = completeness_check(parsed)
                     if problem:
+                        # Without this, all we ever know is "X was missing" —
+                        # not what the model actually sent instead, which is
+                        # the one thing that would let anyone diagnose WHY
+                        # (wrong field name? genuinely near-empty JSON?
+                        # truncated mid-object despite finish_reason not
+                        # saying so?) rather than just seeing this happen
+                        # again with no more information than last time.
+                        logger.warning(
+                            "%s completeness check failed (%s) — raw keys=%s, "
+                            "truncated content=%.500s",
+                            provider, problem, sorted(parsed.keys()), content,
+                        )
                         raise RuntimeError(f"Response parsed but looks incomplete: {problem}")
                 return parsed
             except Exception as exc:
@@ -1450,6 +1462,15 @@ Returner KUN gyldig JSON:
         this file independently re-validates every LLM claim: a combination
         rule with a specific, checkable definition belongs in code, not in
         a model's judgment call repeated identically every time.
+
+        Critically: a part with status=="failed" (submitted, but grading
+        itself broke after every retry — a real infrastructure/LLM problem)
+        is NOT the same as a part that's None (genuinely never submitted).
+        Collapsing both into "not answered" silently applies the essay-only/
+        email-only docking rule to a student whose actual submission was
+        fine — they'd be penalized for a reliability problem in this
+        system, not their own writing. That case returns a distinct
+        "status": "failed" result instead of a plausible-looking grade.
         """
         def rubric_is_clean(payload: WebhookPayload) -> bool:
             if payload.rubrik is None:
@@ -1461,6 +1482,25 @@ Returner KUN gyldig JSON:
             idx = GRADE_SCALE.index(grade)
             idx = max(0, min(len(GRADE_SCALE) - 1, idx + direction))
             return GRADE_SCALE[idx]
+
+        del1_failed = del1_payload is not None and del1_payload.status == "failed"
+        del2_failed = del2_payload is not None and del2_payload.status == "failed"
+        if del1_failed or del2_failed:
+            failed_parts = [name for name, failed in (("del1", del1_failed), ("del2", del2_failed)) if failed]
+            return {
+                "status": "failed",
+                "overall": None,
+                "pass_fail": None,
+                "rubrik": None,
+                "combination_reason": (
+                    f"Grading genuinely failed for {' and '.join(failed_parts)} after all "
+                    "retries — this is an infrastructure/LLM reliability problem, not a "
+                    "missing submission, so the essay-only/email-only docking rule was "
+                    "deliberately NOT applied. Needs investigation, not a grade."
+                ),
+                "del1_result": del1_payload.model_dump(mode="json", exclude_none=True) if del1_payload else None,
+                "del2_result": del2_payload.model_dump(mode="json", exclude_none=True) if del2_payload else None,
+            }
 
         del1_ok = del1_payload is not None and del1_payload.status == "scored"
         del2_ok = del2_payload is not None and del2_payload.status == "scored"
