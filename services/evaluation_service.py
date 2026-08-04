@@ -66,17 +66,34 @@ async def grade_and_combine_mock(mock_id: str, webhook_url: str | None) -> None:
         del1_raw = row.get("del1") or {}
         del2_raw = row.get("del2") or {}
 
-        def _combine_field(field: str) -> str:
+        def _combine_field(field: str, fallback: str | None = "(not answered)") -> str | None:
             # evaluations.question/answer are NOT NULL — a combined mock
             # result never had a "the submission" the way a single-mode one
             # does, so this builds one from both halves rather than leaving
             # either column null (which broke the write the same way
-            # exam_type's absence did before).
+            # exam_type's absence did before). question_description is NOT
+            # a NOT NULL column though, so it gets fallback=None instead —
+            # otherwise the literal string "(not answered)" leaks straight
+            # into a frontend that renders this field directly.
             del1_value = str(del1_raw.get(field) or "").strip()
             del2_value = str(del2_raw.get(field) or "").strip()
             if del1_value and del2_value:
                 return f"DEL 1: {del1_value}\n\nDEL 2: {del2_value}"
-            return del2_value or del1_value or "(not answered)"
+            return del2_value or del1_value or fallback
+
+        # One consistent errors[] contract regardless of submission_mode:
+        # each error carries its own position PLUS which part it's relative
+        # to, instead of forcing frontend code to know "for mock results,
+        # go dig into del1/del2 instead of the top-level field."
+        combined_errors: list = []
+        if del1_payload and del1_payload.errors:
+            combined_errors.extend(
+                error.model_copy(update={"part": "del1"}) for error in del1_payload.errors
+            )
+        if del2_payload and del2_payload.errors:
+            combined_errors.extend(
+                error.model_copy(update={"part": "del2"}) for error in del2_payload.errors
+            )
 
         del1_feedback = (del1_payload.feedback or "").strip() if del1_payload else ""
         del2_feedback = (del2_payload.feedback or "").strip() if del2_payload else ""
@@ -97,7 +114,7 @@ async def grade_and_combine_mock(mock_id: str, webhook_url: str | None) -> None:
             status=combined.get("status", "scored"),
             exam_type=row.get("exam_type"),
             question=_combine_field("question"),
-            question_description=_combine_field("question_description"),
+            question_description=_combine_field("question_description", fallback=None),
             answer=_combine_field("answer"),
             rubrik=combined["rubrik"],
             overall=combined["overall"],
@@ -105,8 +122,11 @@ async def grade_and_combine_mock(mock_id: str, webhook_url: str | None) -> None:
             feedback=combined_feedback[:2000] if combined_feedback else None,
             examiner_summary=narrative_summary[:1200],
             error=combined["combination_reason"] if combined.get("status") == "failed" else None,
+            errors=combined_errors or None,
             del1=combined["del1_result"],
             del2=combined["del2_result"],
+            del1_word_count=del1_payload.word_count if del1_payload else None,
+            del2_word_count=del2_payload.word_count if del2_payload else None,
             model_metadata={
                 "submission_mode": "mock",
                 "combination_reason": combined["combination_reason"],

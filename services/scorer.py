@@ -51,14 +51,20 @@ INTERN_BASE_URL = os.environ.get("LLM_INTERN_BASE_URL") or GRADING_BASE_URL
 INTERN_API_KEY = os.environ.get("LLM_INTERN_API_KEY") or GRADING_API_KEY
 
 # Grading model: does correction + full evaluation (rubric, grade, feedback).
-GROQ_GRADING_MODEL = os.environ.get("GROQ_GRADING_MODEL", "openai/gpt-oss-120b")
+# LLM_GRADING_MODEL is the current name; LLM_GRADING_MODEL still works as a
+# fallback so existing Render env vars from before this rename don't break.
+LLM_GRADING_MODEL = os.environ.get(
+    "LLM_GRADING_MODEL", os.environ.get("LLM_GRADING_MODEL", "openai/gpt-oss-120b")
+)
 # Intern model: cheap/fast first-pass error *detection* only — no corrections,
 # no grading. Its candidates are hints for the grading model, never used directly.
-GROQ_INTERN_MODEL = os.environ.get("GROQ_INTERN_MODEL", "openai/gpt-oss-20b")
+LLM_INTERN_MODEL = os.environ.get(
+    "LLM_INTERN_MODEL", os.environ.get("LLM_INTERN_MODEL", "openai/gpt-oss-20b")
+)
 PROMPT_VERSION = "knowledge-grounded-v7.0-two-call-intern-scan"
-TEMPERATURE = float(os.environ.get("GROQ_TEMPERATURE", "0.05"))
-INTERN_TEMPERATURE = float(os.environ.get("GROQ_INTERN_TEMPERATURE", "0.1"))
-MAX_RETRIES = int(os.environ.get("GROQ_MAX_RETRIES", "3"))
+TEMPERATURE = float(os.environ.get("LLM_GRADING_TEMPERATURE", os.environ.get("GROQ_TEMPERATURE", "0.025")))
+INTERN_TEMPERATURE = float(os.environ.get("LLM_INTERN_TEMPERATURE", os.environ.get("GROQ_INTERN_TEMPERATURE", "0.05")))
+MAX_RETRIES = int(os.environ.get("LLM_MAX_RETRIES", os.environ.get("GROQ_MAX_RETRIES", "3")))
 # gpt-oss models spend part of max_tokens on hidden reasoning before writing
 # the actual JSON body — these budgets are higher than a non-reasoning model
 # (like the old llama-3.3-70b-versatile) would have needed for the same task.
@@ -68,26 +74,25 @@ MAX_RETRIES = int(os.environ.get("GROQ_MAX_RETRIES", "3"))
 # dommer prompt (evidence package + COR analysis + answer) runs ~5,000 tokens,
 # so max_tokens has to leave headroom under 8,000 total, not just be "enough
 # for reasoning." _clamp_max_tokens() enforces this dynamically per request;
-# these are just the requested ceiling before that clamp is applied.
-MAX_OUTPUT_TOKENS = int(os.environ.get("GROQ_MAX_OUTPUT_TOKENS", "2200"))
-INTERN_MAX_OUTPUT_TOKENS = int(os.environ.get("GROQ_INTERN_MAX_OUTPUT_TOKENS", "1800"))
-# Groq's per-model tokens-per-minute ceiling. 8000 matches the free tier for
-# both gpt-oss models today — raise this via env var once/if you move to
-# Groq's Developer tier (roughly 10x higher TPM), so this stops clamping
-# unnecessarily once you have real headroom.
-#
-# IMPORTANT: this ceiling is provider-specific, not universal. When grading
-# or intern points at a different provider (Mistral, Together, etc.) via
-# LLM_GRADING_BASE_URL/LLM_INTERN_BASE_URL, that provider almost certainly
-# has a DIFFERENT real TPM limit than Groq's 8000 — applying Groq's number
-# to it is a guess, not a fact, and can clamp far more aggressively than
-# actually necessary (or not aggressively enough). Set LLM_GRADING_TPM_LIMIT
-# / LLM_INTERN_TPM_LIMIT to that provider's real limit once you know it;
-# both fall back to GROQ_TPM_LIMIT if unset, which is only correct for Groq.
-GROQ_TPM_LIMIT = int(os.environ.get("GROQ_TPM_LIMIT", "8000"))
-GRADING_TPM_LIMIT = int(os.environ.get("LLM_GRADING_TPM_LIMIT", str(GROQ_TPM_LIMIT)))
-INTERN_TPM_LIMIT = int(os.environ.get("LLM_INTERN_TPM_LIMIT", str(GROQ_TPM_LIMIT)))
-TPM_SAFETY_MARGIN = int(os.environ.get("GROQ_TPM_SAFETY_MARGIN", "600"))
+# these are just the requested ceiling before that clamp is applied. This
+# specific 8,000 number was Groq's free-tier ceiling — if you're on a
+# different provider, LLM_GRADING_TPM_LIMIT/LLM_INTERN_TPM_LIMIT below is
+# what actually matters, not this comment.
+MAX_OUTPUT_TOKENS = int(os.environ.get("LLM_GRADING_MAX_OUTPUT_TOKENS", os.environ.get("GROQ_MAX_OUTPUT_TOKENS", "2200")))
+INTERN_MAX_OUTPUT_TOKENS = int(os.environ.get("LLM_INTERN_MAX_OUTPUT_TOKENS", os.environ.get("GROQ_INTERN_MAX_OUTPUT_TOKENS", "1800")))
+# IMPORTANT: this ceiling is provider-specific, not universal — it happens to
+# match Groq's free-tier limit for both gpt-oss models, which is where this
+# default came from, but a different provider (Mistral, Together, etc.)
+# almost certainly has a DIFFERENT real TPM limit. Applying Groq's number to
+# a different provider is a guess, not a fact, and can clamp far more
+# aggressively than necessary (or not aggressively enough). Set
+# LLM_GRADING_TPM_LIMIT / LLM_INTERN_TPM_LIMIT to whatever your actual
+# provider's real limit is — both only fall back to LLM_TPM_LIMIT (default
+# 8000, Groq's free-tier number) if you haven't set the real value yet.
+LLM_TPM_LIMIT = int(os.environ.get("LLM_TPM_LIMIT", os.environ.get("GROQ_TPM_LIMIT", "8000")))
+GRADING_TPM_LIMIT = int(os.environ.get("LLM_GRADING_TPM_LIMIT", str(LLM_TPM_LIMIT)))
+INTERN_TPM_LIMIT = int(os.environ.get("LLM_INTERN_TPM_LIMIT", str(LLM_TPM_LIMIT)))
+TPM_SAFETY_MARGIN = int(os.environ.get("LLM_TPM_SAFETY_MARGIN", os.environ.get("GROQ_TPM_SAFETY_MARGIN", "600")))
 # The ~4 chars/token rule of thumb is optimistic for this prompt's actual
 # shape: JSON-heavy (evidence package, COR analysis) and Danish text with
 # æ/ø/å, both of which tokenize less efficiently than plain English prose.
@@ -95,14 +100,14 @@ TPM_SAFETY_MARGIN = int(os.environ.get("GROQ_TPM_SAFETY_MARGIN", "600"))
 # evidence/knowledge citations, so JSON overhead grows faster than a flat
 # char-count estimate assumes. A proportional buffer (not just a fixed
 # margin) is what actually keeps this safe across submission lengths.
-TOKEN_ESTIMATE_SAFETY_FACTOR = float(os.environ.get("GROQ_TOKEN_ESTIMATE_SAFETY_FACTOR", "1.35"))
-MIN_OUTPUT_TOKENS = int(os.environ.get("GROQ_MIN_OUTPUT_TOKENS", "900"))
+TOKEN_ESTIMATE_SAFETY_FACTOR = float(os.environ.get("LLM_TOKEN_ESTIMATE_SAFETY_FACTOR", os.environ.get("GROQ_TOKEN_ESTIMATE_SAFETY_FACTOR", "1.35")))
+MIN_OUTPUT_TOKENS = int(os.environ.get("LLM_MIN_OUTPUT_TOKENS", os.environ.get("GROQ_MIN_OUTPUT_TOKENS", "900")))
 # low/medium/high — only applies to models that support it (gpt-oss family).
 # "low" leaves more of the token budget for the actual JSON output rather
 # than internal reasoning, which is what both these tasks are bottlenecked on.
-GRADING_REASONING_EFFORT = os.environ.get("GROQ_REASONING_EFFORT", "low")
-INTERN_REASONING_EFFORT = os.environ.get("GROQ_INTERN_REASONING_EFFORT", "low")
-PROMPT_MAX_CHARS = int(os.environ.get("GROQ_PROMPT_MAX_CHARS", "16000"))
+GRADING_REASONING_EFFORT = os.environ.get("LLM_GRADING_REASONING_EFFORT", os.environ.get("GROQ_REASONING_EFFORT", "low"))
+INTERN_REASONING_EFFORT = os.environ.get("LLM_INTERN_REASONING_EFFORT", os.environ.get("GROQ_INTERN_REASONING_EFFORT", "low"))
+PROMPT_MAX_CHARS = int(os.environ.get("LLM_PROMPT_MAX_CHARS", os.environ.get("GROQ_PROMPT_MAX_CHARS", "16000")))
 RETRY_DELAY = 1.5
 
 GRADE_SCALE = [-3, 0, 2, 4, 7, 10, 12]
@@ -162,8 +167,8 @@ class Scorer:
         logger.info(
             "Dommer scorer ready - grading: provider=%s base_url=%s model=%s | "
             "intern: provider=%s base_url=%s model=%s | grammar_hub=%s",
-            GRADING_PROVIDER, GRADING_BASE_URL, GROQ_GRADING_MODEL,
-            INTERN_PROVIDER, INTERN_BASE_URL, GROQ_INTERN_MODEL,
+            GRADING_PROVIDER, GRADING_BASE_URL, LLM_GRADING_MODEL,
+            INTERN_PROVIDER, INTERN_BASE_URL, LLM_INTERN_MODEL,
             "enabled" if lexical_engine and lexical_engine.configured else "disabled",
         )
 
@@ -180,13 +185,13 @@ class Scorer:
             candidate_errors = await self._call_intern_scan(
                 request.answer, request.exam_type
             )
-            raw = await self._call_groq(
+            raw = await self._call_llm(
                 self._system_prompt(request.exam_type),
                 self._user_prompt(
                     request, word_count, evidence, lexical_analysis, candidate_errors
                 ),
                 max_tokens=MAX_OUTPUT_TOKENS,
-                model=GROQ_GRADING_MODEL,
+                model=LLM_GRADING_MODEL,
                 client=self.grading_client,
                 provider=GRADING_PROVIDER,
                 tpm_limit=GRADING_TPM_LIMIT,
@@ -213,24 +218,25 @@ class Scorer:
                 model_metadata={
                     "provider": GRADING_PROVIDER,
                     "intern_provider": INTERN_PROVIDER,
-                    "model": GROQ_GRADING_MODEL,
-                    "intern_model": GROQ_INTERN_MODEL,
+                    "model": LLM_GRADING_MODEL,
+                    "intern_model": LLM_INTERN_MODEL,
                     "prompt_version": PROMPT_VERSION,
                     "llm_calls": 2,
                 },
             )
 
     async def verify_models(self) -> dict[str, dict[str, Any]]:
-        """Minimal, cheap live pings to both Groq models — confirms the API
-        key can actually reach each one right now, distinct from just reading
-        back the configured model name string. Not called on every /health
-        hit (that would burn real Groq quota on routine uptime polling) —
+        """Minimal, cheap live pings to both configured LLMs — confirms the
+        API key can actually reach each one right now, distinct from just
+        reading back the configured model name string. Not called on every
+        /health hit (that would burn real provider quota on routine uptime
+        polling) —
         only when explicitly requested via /health?verify_models=true.
         """
         results: dict[str, dict[str, Any]] = {}
         for role, model, client in (
-            ("grading_model", GROQ_GRADING_MODEL, self.grading_client),
-            ("intern_model", GROQ_INTERN_MODEL, self.intern_client),
+            ("grading_model", LLM_GRADING_MODEL, self.grading_client),
+            ("intern_model", LLM_INTERN_MODEL, self.intern_client),
         ):
             start = time.monotonic()
             try:
@@ -307,11 +313,11 @@ Returner KUN gyldig JSON i dette format:
         same as before this split existed.
         """
         try:
-            raw = await self._call_groq(
+            raw = await self._call_llm(
                 self._intern_system_prompt(),
                 self._intern_user_prompt(answer, exam_type),
                 max_tokens=INTERN_MAX_OUTPUT_TOKENS,
-                model=GROQ_INTERN_MODEL,
+                model=LLM_INTERN_MODEL,
                 client=self.intern_client,
                 provider=INTERN_PROVIDER,
                 tpm_limit=INTERN_TPM_LIMIT,
@@ -351,7 +357,7 @@ Returner KUN gyldig JSON i dette format:
 
         logger.info(
             "Intern scan (%s): %d raw candidate(s), %d passed substring validation",
-            GROQ_INTERN_MODEL, len(raw_candidates), len(validated),
+            LLM_INTERN_MODEL, len(raw_candidates), len(validated),
         )
         return validated
 
@@ -682,15 +688,16 @@ Returner KUN gyldig JSON:
             logger.warning(
                 "max_tokens clamped for model=%s: requested=%d estimated_prompt_tokens=%d "
                 "(raw_char_estimate=%d, safety_factor=%.2f) tpm_limit=%d -> using=%d. "
-                "If this fires often for a non-Groq provider, its real TPM limit is "
-                "probably different from GROQ_TPM_LIMIT — set LLM_GRADING_TPM_LIMIT / "
-                "LLM_INTERN_TPM_LIMIT to that provider's actual limit instead of guessing.",
+                "If this fires often, this provider's real TPM limit is probably "
+                "different from the LLM_TPM_LIMIT default (8000, Groq's free-tier "
+                "number) — set LLM_GRADING_TPM_LIMIT / LLM_INTERN_TPM_LIMIT to this "
+                "provider's actual limit instead of relying on that default.",
                 model, requested_max_tokens, estimated_prompt_tokens,
                 int(raw_estimate), TOKEN_ESTIMATE_SAFETY_FACTOR, tpm_limit, clamped,
             )
         return clamped
 
-    async def _call_groq(
+    async def _call_llm(
         self,
         system: str,
         user: str,
@@ -946,8 +953,8 @@ Returner KUN gyldig JSON:
             model_metadata={
                 "provider": GRADING_PROVIDER,
                 "intern_provider": INTERN_PROVIDER,
-                "model": GROQ_GRADING_MODEL,
-                "intern_model": GROQ_INTERN_MODEL,
+                "model": LLM_GRADING_MODEL,
+                "intern_model": LLM_INTERN_MODEL,
                 "prompt_version": PROMPT_VERSION,
                 "llm_calls": 2,
                 "intern_candidate_count": len(candidate_errors or []),
