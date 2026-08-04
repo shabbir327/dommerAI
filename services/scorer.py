@@ -191,6 +191,7 @@ class Scorer:
                 provider=GRADING_PROVIDER,
                 tpm_limit=GRADING_TPM_LIMIT,
                 reasoning_effort=GRADING_REASONING_EFFORT,
+                completeness_check=self._grading_response_incomplete_reason,
             )
             payload = self._build_payload(
                 raw, request, word_count, evidence, lexical_analysis, candidate_errors
@@ -697,6 +698,7 @@ Returner KUN gyldig JSON:
         tpm_limit: int,
         temperature: float = TEMPERATURE,
         reasoning_effort: str = "low",
+        completeness_check: Optional[Any] = None,
     ) -> dict:
         max_tokens = self._clamp_max_tokens(system, user, max_tokens, model, tpm_limit)
         last_error: Optional[Exception] = None
@@ -730,6 +732,21 @@ Returner KUN gyldig JSON:
                 parsed = json.loads(content)
                 if not isinstance(parsed, dict):
                     raise RuntimeError("Groq response was not a JSON object.")
+                # A response can be syntactically valid JSON (passes both
+                # checks above) while still being almost entirely empty of
+                # actual evaluation content — e.g. {"overall": 0} with no
+                # rubric, no feedback, no errors. Without this check, that
+                # silently flows through _build_payload's per-field defaults
+                # (missing rubric dimension -> "Midt", missing feedback ->
+                # "No feedback available.") and comes out looking like a
+                # completed, legitimate "scored" result instead of the
+                # failure it actually is. Retrying here, same as any other
+                # failed attempt, is far better than reporting a fabricated
+                # grade to a student.
+                if completeness_check is not None:
+                    problem = completeness_check(parsed)
+                    if problem:
+                        raise RuntimeError(f"Response parsed but looks incomplete: {problem}")
                 return parsed
             except Exception as exc:
                 last_error = exc
@@ -742,6 +759,26 @@ Returner KUN gyldig JSON:
                 if attempt < MAX_RETRIES:
                     await asyncio.sleep(RETRY_DELAY * (2 ** (attempt - 1)))
         raise RuntimeError(f"All {MAX_RETRIES} Groq attempts failed for model={model}: {last_error}")
+
+    @staticmethod
+    def _grading_response_incomplete_reason(parsed: dict[str, Any]) -> Optional[str]:
+        """None if this looks like a genuine evaluation; otherwise a short
+        description of what's missing. Deliberately checks presence/content,
+        not correctness — a wrong-but-present rubric value is a grading
+        quality question; a MISSING one is a plumbing failure that should
+        never reach a student framed as a normal completed result."""
+        for dimension in ("pragmatisk", "diskursiv", "lingvistisk"):
+            value = parsed.get(dimension)
+            if not isinstance(value, str) or not value.strip():
+                return f"'{dimension}' missing or empty"
+        if "overall" not in parsed or parsed.get("overall") is None:
+            # 0 is a real, legitimate grade — only reject if the key is
+            # truly absent or explicitly null, not falsy-but-present.
+            return "'overall' missing"
+        feedback = parsed.get("feedback")
+        if not isinstance(feedback, str) or not feedback.strip():
+            return "'feedback' missing or empty"
+        return None
 
     @staticmethod
     def _log_sentence_scan(sentence_scan: Any) -> None:
