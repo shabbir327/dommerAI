@@ -14,13 +14,20 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from threading import RLock
 from typing import Any
 
 from supabase import Client
 
 logger = logging.getLogger("dommer.mock_progress")
+
+DENMARK_TZ = ZoneInfo("Europe/Copenhagen")
+
+
+def _now_cph() -> datetime:
+    return datetime.now(DENMARK_TZ)
 
 
 class MockProgressStore:
@@ -53,7 +60,7 @@ class MockProgressStore:
         upsert below would silently overwrite Del 1's real, already-persisted
         answer with null — a correctness bug, not just a missed cache hit.
         """
-        now = datetime.now(timezone.utc).isoformat()
+        now = _now_cph().isoformat()
         with self._lock:
             row = self._items.get(mock_id)
         if row is None:
@@ -119,7 +126,7 @@ class MockProgressStore:
         return self._load_from_supabase(mock_id)
 
     def mark_completed(self, mock_id: str, final_eval_id: str) -> None:
-        now = datetime.now(timezone.utc).isoformat()
+        now = _now_cph().isoformat()
         with self._lock:
             row = self._items.get(mock_id)
             if row is not None:

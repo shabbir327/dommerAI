@@ -1,32 +1,70 @@
 """Persist candidate submissions and completed evaluations in DommerAI Supabase.
 
-The production ``evaluations`` table uses normal columns (``exam_type``, ``answer``,
-``feedback`` and so on), rather than requiring a single ``result_json`` column.
-This store discovers the live table columns, writes only supported fields, and keeps
-an in-memory cache for fast polling.
+Writes to the ``evaluation_results`` table — a deliberately tidier redesign
+of the original wide ``evaluations`` table, which had grown to ~30 columns
+(candidate_id, webhook_url, writing_statistics, knowledge_used,
+retrieval_metadata, model_metadata, dimension_reasons, task_coverage,
+strengths, improvements, result_json, submitted_at, started_at, all as
+separate top-level columns) and become hard to browse directly in Supabase's
+Table Editor. This store folds the debug/secondary fields into one
+``metadata`` jsonb column and drops columns that were redundant in practice
+(``candidate_id`` always mirrored ``eval_id``; ``started_at`` was always set
+to the same instant as the old ``submitted_at``, since nothing in this
+codebase ever recorded a separate "started" moment).
+
+The in-memory cache and the API-facing payload shape are unaffected by this —
+WebhookPayload still returns model_metadata/writing_statistics/etc. as
+separate fields; only the database row shape changed. _build_database_row
+folds them in on write, _row_to_payload expands them back out on read.
+
+All timestamps are computed in Europe/Copenhagen local time (not UTC) before
+being sent to Supabase, per the person's request that timestamps read as
+Danish time rather than UTC when browsing the table directly.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime
 from threading import RLock
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from supabase import Client
 
 logger = logging.getLogger("dommer.results")
 
+DENMARK_TZ = ZoneInfo("Europe/Copenhagen")
+
+# Fields folded into the single `metadata` jsonb column instead of getting
+# their own top-level column — these are genuinely useful, but are debug/
+# secondary detail rather than the handful of fields someone actually wants
+# to see at a glance when scanning rows in the Table Editor.
+_METADATA_FIELDS = (
+    "webhook_url",
+    "model_metadata",
+    "writing_statistics",
+    "knowledge_used",
+    "retrieval_metadata",
+    "dimension_reasons",
+    "task_coverage",
+    "strengths",
+    "improvements",
+)
+
+
+def _now_cph() -> datetime:
+    return datetime.now(DENMARK_TZ)
+
 
 class EvaluationResultStore:
     def __init__(self, client: Client | None = None) -> None:
         self.client = client
-        self.table = os.environ.get("EVALUATIONS_TABLE", "evaluations")
+        self.table = os.environ.get("EVALUATIONS_TABLE", "evaluation_results")
         self.id_column = os.environ.get("EVALUATION_ID_COLUMN", "eval_id")
         self.status_column = os.environ.get("EVALUATION_STATUS_COLUMN", "status")
         self.updated_column = os.environ.get("EVALUATION_UPDATED_COLUMN", "updated_at")
-        self.result_column = os.environ.get("EVALUATION_RESULT_COLUMN", "result_json")
         self.persist_enabled = os.environ.get("PERSIST_EVALUATIONS", "true").lower() in {
             "1", "true", "yes", "on"
         }
@@ -39,7 +77,7 @@ class EvaluationResultStore:
         if not eval_id:
             raise ValueError("Evaluation payload must contain eval_id.")
 
-        now = datetime.now(timezone.utc).isoformat()
+        now = _now_cph().isoformat()
         with self._lock:
             existing = self._items.get(eval_id)
         if existing is None:
@@ -54,15 +92,7 @@ class EvaluationResultStore:
             existing = self._load_from_supabase(eval_id) or {}
         with self._lock:
             stored = self._deep_merge(existing, payload)
-            # The production table requires submitted_at. Set it only on the
-            # first save and preserve it when the same evaluation is updated
-            # from pending to scored/failed.
-            stored.setdefault("submitted_at", now)
-            # started_at: when this evaluation was first accepted (the
-            # "pending" save). completed_at: only set once the evaluation
-            # actually reaches a terminal state — previously neither column
-            # was ever written, so both stayed permanently null in Supabase.
-            stored.setdefault("started_at", now)
+            stored.setdefault("created_at", now)
             if stored.get("status") in ("scored", "failed"):
                 stored.setdefault("completed_at", now)
             stored["updated_at"] = now
@@ -76,7 +106,7 @@ class EvaluationResultStore:
 
         row = self._build_database_row(stored, now)
         if not row:
-            logger.error("No compatible evaluations columns found — eval_id=%s", eval_id)
+            logger.error("No compatible evaluation_results columns found — eval_id=%s", eval_id)
             return
 
         try:
@@ -161,22 +191,22 @@ class EvaluationResultStore:
             if rows:
                 self._columns = set(rows[0].keys())
                 logger.info(
-                    "Discovered evaluations schema — columns=%s",
+                    "Discovered evaluation_results schema — columns=%s",
                     sorted(self._columns),
                 )
                 return self._columns
         except Exception as exc:
-            logger.warning("Could not discover evaluations schema — %s", exc)
+            logger.warning("Could not discover evaluation_results schema — %s", exc)
 
-        # Expected production schema. Unsupported fields are removed and retried only
-        # through live discovery when the table contains at least one row.
+        # Expected schema for a fresh evaluation_results table. Unsupported
+        # fields are removed and retried only through live discovery once
+        # the table contains at least one row.
         self._columns = {
-            "eval_id", "candidate_id", "exam_type", "status", "question",
-            "question_description", "answer", "webhook_url", "rubrik", "overall",
-            "pass_fail", "feedback", "examiner_summary", "errors", "word_count",
-            "writing_statistics", "knowledge_used", "retrieval_metadata",
-            "model_metadata", "error", "submitted_at", "started_at", "completed_at",
-            "created_at", "updated_at", "result_json", "del1", "del2",
+            "eval_id", "exam_type", "submission_mode", "status", "question",
+            "question_description", "answer", "overall", "pass_fail", "rubrik",
+            "feedback", "examiner_summary", "errors", "word_count", "del1",
+            "del2", "metadata", "error", "created_at", "completed_at",
+            "updated_at",
         }
         return self._columns
 
@@ -184,41 +214,42 @@ class EvaluationResultStore:
         columns = self._discover_columns()
         submission = stored.get("submission") if isinstance(stored.get("submission"), dict) else {}
 
-        candidate_id = submission.get("candidate_id") or stored.get("candidate_id") or stored.get("eval_id")
+        submission_mode = (
+            stored.get("submission_mode")
+            or submission.get("submission_mode")
+            or (stored.get("model_metadata") or {}).get("submission_mode")
+            or "single"
+        )
+
+        metadata: dict[str, Any] = {}
+        for field in _METADATA_FIELDS:
+            value = stored.get(field) or submission.get(field)
+            if value not in (None, {}, []):
+                metadata[field] = value
+
         candidates: dict[str, Any] = {
             self.id_column: stored.get("eval_id"),
-            self.status_column: stored.get("status"),
-            self.updated_column: now,
-            "submitted_at": stored.get("submitted_at") or now,
-            "started_at": stored.get("started_at"),
-            "completed_at": stored.get("completed_at"),
-            "candidate_id": candidate_id,
             "exam_type": submission.get("exam_type") or stored.get("exam_type"),
+            "submission_mode": submission_mode,
+            self.status_column: stored.get("status"),
             "question": submission.get("question") or stored.get("question"),
             "question_description": submission.get("question_description") or stored.get("question_description"),
             "answer": submission.get("answer") or stored.get("answer"),
-            "webhook_url": submission.get("webhook_url") or stored.get("webhook_url"),
-            "rubrik": stored.get("rubrik"),
             "overall": stored.get("overall"),
             "pass_fail": stored.get("pass_fail"),
+            "rubrik": stored.get("rubrik"),
             "feedback": stored.get("feedback"),
             "examiner_summary": stored.get("examiner_summary"),
-            "errors": stored.get("errors"),
+            "errors": stored.get("errors") or [],
             "word_count": stored.get("word_count"),
-            "writing_statistics": stored.get("writing_statistics"),
-            "knowledge_used": stored.get("knowledge_used"),
-            "retrieval_metadata": stored.get("retrieval_metadata"),
-            "model_metadata": stored.get("model_metadata"),
-            "error": stored.get("error"),
             "del1": stored.get("del1"),
             "del2": stored.get("del2"),
+            "metadata": metadata,
+            "error": stored.get("error"),
+            "created_at": stored.get("created_at") or now,
+            "completed_at": stored.get("completed_at"),
+            self.updated_column: now,
         }
-
-        # Backwards compatibility when a result_json JSONB column exists.
-        if self.result_column in columns:
-            candidates[self.result_column] = {
-                key: value for key, value in stored.items() if key != "updated_at"
-            }
 
         return {
             key: value
@@ -227,17 +258,19 @@ class EvaluationResultStore:
         }
 
     def _row_to_payload(self, row: dict[str, Any]) -> dict[str, Any]:
-        result = row.get(self.result_column)
-        if isinstance(result, dict):
-            payload = dict(result)
-            payload.setdefault("updated_at", row.get(self.updated_column))
-            return payload
+        metadata = row.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
 
         payload = {
             key: value
             for key, value in row.items()
-            if key not in {"created_at"} and value is not None
+            if key not in {"metadata", "created_at"} and value is not None
         }
+        for field in _METADATA_FIELDS:
+            if field in metadata:
+                payload[field] = metadata[field]
+        payload.setdefault("updated_at", row.get(self.updated_column))
         return payload
 
     @staticmethod
