@@ -1392,17 +1392,27 @@ Returner KUN gyldig JSON:
 
         Reuses the exact same error-detection/COR-grounded grading pass —
         only the framing changes: no rubrik, no numeric grade. Pass/fail
-        becomes "no unresolved high-severity error" instead of a mapped
-        grade, since a single glaring V2/agreement error is a more useful
-        practice-mode signal than a projected exam-scale number would be.
+        checks two independent things, not just one: no unresolved
+        high-severity grammar error, AND no task_coverage item marked
+        "missing" (e.g. well under the word/sentence-count requirement).
+        Checking only errors let a submission wildly short of the stated
+        requirement (a handful of words against a 50-word/8-sentence ask)
+        come back "PASSED" purely because the little text it did contain
+        happened to be grammatically clean — the model's own task_coverage
+        and dimension_reasons already correctly flagged the task as
+        unfulfilled; pass_fail just wasn't reading that signal at all.
         """
         has_high_severity = any(
             error.severity == "high" for error in (payload.errors or [])
         )
+        has_missing_requirement = any(
+            item.get("status") == "missing" for item in (payload.task_coverage or [])
+        )
+        failed = has_high_severity or has_missing_requirement
         return payload.model_copy(update={
             "rubrik": None,
             "overall": None,
-            "pass_fail": "NOT PASSED" if has_high_severity else "PASSED",
+            "pass_fail": "NOT PASSED" if failed else "PASSED",
         })
 
     @staticmethod
@@ -1523,11 +1533,23 @@ Returner KUN gyldig JSON:
         elif "Under niveau" in values and adjusted > 2:
             adjusted = 2
             reason = "A dimension was Under niveau, so the grade was capped at 2."
-        elif levels.get("pragmatisk") == "Bund" and missing_count > 0 and adjusted > 0:
-            adjusted = 0
+        elif levels.get("pragmatisk") == "Bund" and missing_count > 0 and adjusted > 2:
+            # Both the PD2 (April 2025) and PD3 (August 2024) guides say this
+            # explicitly: "Hvis en prøvedeltager har besvaret en opgave
+            # indholdsmæssigt skævt... trækker det ned, men dette vil ikke i
+            # sig selv føre til en karakter under bestå-grænsen 02." Content
+            # or missing-content problems alone should never drop a grade
+            # below the pass line — they should pull it down, not fail it
+            # outright. Previously capped straight to 0 (fail), which a real
+            # official-ground-truth case (graded 7 by actual examiners)
+            # directly contradicted. Capping at 2 instead still meaningfully
+            # penalizes missing content without asserting a fail the guide
+            # itself says shouldn't happen from this cause alone.
+            adjusted = 2
             reason = (
                 "Pragmatisk was Bund and a required part of the task was missing, "
-                "so the grade was capped at 0 (fail)."
+                "so the grade was capped at 2 (minimum pass) — per both grading "
+                "guides, content issues alone should not fail the submission."
             )
         elif values.count("Bund") == 3 and adjusted > 2:
             adjusted = 2
