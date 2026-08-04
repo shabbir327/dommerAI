@@ -7,6 +7,15 @@ python-dotenv==1.0.1
 supabase>=2.10.0,<3.0.0
 openai>=1.50.0,<2.0.0
 
+# zoneinfo (stdlib, used for Danish local timestamps in
+# repositories/result_store.py and repositories/mock_progress_repository.py)
+# needs a tz database to resolve names like "Europe/Copenhagen". Some minimal
+# Docker base images don't ship one at the OS level, in which case zoneinfo
+# raises ZoneInfoNotFoundError at runtime. tzdata is the official Python
+# fallback data package for exactly this case — installing it explicitly
+# means this doesn't depend on Render's base image happening to include it.
+tzdata
+
 # Contextual Danish POS tagging (see services/pos_tagger.py). Plain spaCy's
 # small Danish pipeline, not dacy: dacy's transformer stack (spacy-transformers
 # + torch + the model weights) exceeded this instance's 512MB memory limit
