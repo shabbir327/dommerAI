@@ -703,14 +703,15 @@ Returner KUN gyldig JSON:
         reasoning_effort: str = "low",
         completeness_check: Optional[Any] = None,
     ) -> dict:
-        max_tokens = self._clamp_max_tokens(system, user, max_tokens, model, tpm_limit)
+        current_max_tokens = self._clamp_max_tokens(system, user, max_tokens, model, tpm_limit)
         last_error: Optional[Exception] = None
         for attempt in range(1, MAX_RETRIES + 1):
+            truncated = False
             try:
                 response = await client.chat.completions.create(
                     model=model,
                     temperature=temperature,
-                    max_tokens=max_tokens,
+                    max_tokens=current_max_tokens,
                     messages=[
                         {"role": "system", "content": system},
                         {"role": "user", "content": user},
@@ -719,7 +720,8 @@ Returner KUN gyldig JSON:
                     **self._reasoning_kwargs(model, reasoning_effort, provider),
                 )
                 choice = response.choices[0]
-                if getattr(choice, "finish_reason", None) == "length":
+                truncated = getattr(choice, "finish_reason", None) == "length"
+                if truncated:
                     # The model hit max_tokens before finishing — content may
                     # still parse as valid JSON but with fields silently empty
                     # or truncated. Surfacing this in logs makes that failure
@@ -727,7 +729,7 @@ Returner KUN gyldig JSON:
                     logger.warning(
                         "%s response for model=%s hit finish_reason=length "
                         "(max_tokens=%d) — output may be truncated/incomplete.",
-                        provider, model, max_tokens,
+                        provider, model, current_max_tokens,
                     )
                 content = choice.message.content
                 if not content:
@@ -759,6 +761,20 @@ Returner KUN gyldig JSON:
                 # changes, and it only adds latency. Fail immediately with a clear error.
                 if "request too large" in message or "error code: 413" in message:
                     break
+                if truncated or "unterminated string" in message:
+                    # Retrying with the SAME max_tokens after a truncation
+                    # fails identically every time — this was observed
+                    # directly in production (3/3 identical failures on one
+                    # call). Escalate the budget before the next attempt
+                    # instead of repeating a request that's already proven
+                    # it can't finish. Still re-clamped against tpm_limit,
+                    # so this can't blow past the provider's real ceiling.
+                    bumped = int(current_max_tokens * 1.5)
+                    current_max_tokens = self._clamp_max_tokens(system, user, bumped, model, tpm_limit)
+                    logger.info(
+                        "Escalating max_tokens to %d for next attempt after truncation.",
+                        current_max_tokens,
+                    )
                 if attempt < MAX_RETRIES:
                     await asyncio.sleep(RETRY_DELAY * (2 ** (attempt - 1)))
         raise RuntimeError(f"All {MAX_RETRIES} {provider} attempts failed for model={model}: {last_error}")
