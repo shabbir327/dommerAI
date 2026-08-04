@@ -15,8 +15,8 @@ from models import (
 )
 from services.scorer import (
     GRADING_PROVIDER,
-    GROQ_GRADING_MODEL,
-    GROQ_INTERN_MODEL,
+    LLM_GRADING_MODEL,
+    LLM_INTERN_MODEL,
     INTERN_PROVIDER,
     PROMPT_VERSION,
 )
@@ -93,8 +93,8 @@ async def health() -> HealthResponse:
             ready=scorer_ready,
             provider=GRADING_PROVIDER if scorer_ready else None,
             intern_provider=INTERN_PROVIDER if scorer_ready else None,
-            model=GROQ_GRADING_MODEL if scorer_ready else None,
-            intern_model=GROQ_INTERN_MODEL if scorer_ready else None,
+            model=LLM_GRADING_MODEL if scorer_ready else None,
+            intern_model=LLM_INTERN_MODEL if scorer_ready else None,
             prompt_version=PROMPT_VERSION if scorer_ready else None,
             grammar_hub_integrated=integrated,
         ),
