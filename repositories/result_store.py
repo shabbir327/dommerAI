@@ -205,8 +205,8 @@ class EvaluationResultStore:
             "eval_id", "exam_type", "submission_mode", "status", "question",
             "question_description", "answer", "overall", "pass_fail", "rubrik",
             "feedback", "examiner_summary", "errors", "word_count", "del1",
-            "del2", "metadata", "error", "created_at", "completed_at",
-            "updated_at",
+            "del2", "del1_word_count", "del2_word_count", "metadata", "error",
+            "created_at", "completed_at", "updated_at",
         }
         return self._columns
 
@@ -244,6 +244,8 @@ class EvaluationResultStore:
             "word_count": stored.get("word_count"),
             "del1": stored.get("del1"),
             "del2": stored.get("del2"),
+            "del1_word_count": stored.get("del1_word_count"),
+            "del2_word_count": stored.get("del2_word_count"),
             "metadata": metadata,
             "error": stored.get("error"),
             "created_at": stored.get("created_at") or now,
