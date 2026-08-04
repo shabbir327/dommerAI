@@ -41,7 +41,18 @@ class EvaluationResultStore:
 
         now = datetime.now(timezone.utc).isoformat()
         with self._lock:
-            existing = dict(self._items.get(eval_id, {}))
+            existing = self._items.get(eval_id)
+        if existing is None:
+            # Not in memory doesn't mean genuinely new — a process restart
+            # between the initial "pending" save (which carries the raw
+            # submission: question/answer/exam_type) and this later
+            # "scored"/"failed" update wipes the in-memory cache but not
+            # Supabase. Without this check, that restart would silently
+            # drop the earlier submission data from the merge below, and
+            # question/answer/exam_type being NOT NULL columns turns that
+            # into a failed write instead of a stale-but-harmless gap.
+            existing = self._load_from_supabase(eval_id) or {}
+        with self._lock:
             stored = self._deep_merge(existing, payload)
             # The production table requires submitted_at. Set it only on the
             # first save and preserve it when the same evaluation is updated
@@ -89,15 +100,9 @@ class EvaluationResultStore:
                 exc,
             )
 
-    def get(self, eval_id: str) -> dict[str, Any] | None:
-        with self._lock:
-            item = self._items.get(eval_id)
-            if item is not None:
-                return dict(item)
-
+    def _load_from_supabase(self, eval_id: str) -> dict[str, Any] | None:
         if not self.persist_enabled or self.client is None:
             return None
-
         try:
             response = (
                 self.client.table(self.table)
@@ -117,6 +122,13 @@ class EvaluationResultStore:
                 exc,
             )
             return None
+
+    def get(self, eval_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            item = self._items.get(eval_id)
+            if item is not None:
+                return dict(item)
+        return self._load_from_supabase(eval_id)
 
     def list(self, limit: int = 20, status: str | None = None) -> list[dict[str, Any]]:
         # Prefer live Supabase data so results survive Render restarts.
