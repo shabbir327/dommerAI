@@ -13,12 +13,17 @@ from models import EvaluationRequest, WebhookPayload
 logger = logging.getLogger("dommer.evaluation")
 
 
-async def store_mock_part(request: EvaluationRequest) -> bool:
+async def store_mock_part(request: EvaluationRequest) -> tuple[bool, int]:
     """Synchronous, no LLM calls — just persists this half and reports
     whether its pair has already arrived. Kept separate from the actual
     grading so the API layer can return its 202 ack immediately either way,
     same as the existing single-submission flow, instead of blocking the
     request on up to four LLM calls when this happens to be the second half.
+
+    Returns (ready, generation) — generation is the mock_progress
+    generation counter immediately after this save, which the caller must
+    pass through to grade_and_combine_mock so it can detect, right before
+    saving its result, whether a later resubmission has since superseded it.
     """
     if state.mock_progress is None:
         raise RuntimeError("Mock progress store is not initialised.")
@@ -30,10 +35,14 @@ async def store_mock_part(request: EvaluationRequest) -> bool:
         request_dict=request.model_dump(mode="json", exclude_none=True),
     )
     other_part = "del2" if request.delprove_part == "del1" else "del1"
-    return row.get(other_part) is not None
+    ready = row.get(other_part) is not None
+    generation = int(row.get("generation") or 0)
+    return ready, generation
 
 
-async def grade_and_combine_mock(mock_id: str, webhook_url: str | None) -> None:
+async def grade_and_combine_mock(
+    mock_id: str, webhook_url: str | None, generation: int | None = None
+) -> None:
     """Runs as a background task once store_mock_part reports both halves
     are present. Grades each half independently (own pragmatisk/diskursiv/
     lingvistisk read, since an email and a formal essay have genuinely
@@ -41,6 +50,17 @@ async def grade_and_combine_mock(mock_id: str, webhook_url: str | None) -> None:
     via Scorer.combine_mock_grades — never asks an LLM to do that arithmetic.
     An abandoned single-part mock never reaches this function at all: no
     LLM calls are spent on it, by design.
+
+    `generation` is the mock_progress generation counter captured by the
+    caller at the moment THIS run was triggered. Since this involves up to
+    four LLM calls, a resubmission of either half can trigger a second,
+    newer run before this one finishes. Right before saving, this function
+    re-checks the current generation — if a newer run has since started,
+    this one is stale and must not save, or it could overwrite a newer
+    (possibly already-completed) result with an old one purely because it
+    happened to finish last. If generation is None (caller didn't supply
+    one — e.g. an older client), the check is skipped, preserving prior
+    behaviour rather than failing closed.
     """
     if state.mock_progress is None or state.scorer is None or state.result_store is None:
         logger.error("Mock grading dependencies not ready — mock_id=%s", mock_id)
@@ -133,6 +153,17 @@ async def grade_and_combine_mock(mock_id: str, webhook_url: str | None) -> None:
             },
         )
 
+        if generation is not None and state.mock_progress.get_generation(mock_id) != generation:
+            logger.warning(
+                "Discarding superseded mock combination — mock_id=%s "
+                "triggered_generation=%s current_generation=%s. A newer "
+                "resubmission started a fresh grading run for this mock_id "
+                "while this one was still in flight; saving this result "
+                "would overwrite the newer run's result with a stale one.",
+                mock_id, generation, state.mock_progress.get_generation(mock_id),
+            )
+            return
+
         state.result_store.save(final_payload.model_dump(mode="json", exclude_none=True))
         state.mock_progress.mark_completed(mock_id, mock_id)
 
@@ -140,6 +171,19 @@ async def grade_and_combine_mock(mock_id: str, webhook_url: str | None) -> None:
             await fire_webhook(final_payload, webhook_url)
     except Exception as exc:
         logger.exception("Mock combination failed — mock_id=%s", mock_id)
+        if (
+            generation is not None
+            and state.mock_progress is not None
+            and state.mock_progress.get_generation(mock_id) != generation
+        ):
+            logger.warning(
+                "Suppressing stale failure save for superseded mock combination "
+                "— mock_id=%s triggered_generation=%s current_generation=%s. "
+                "A newer resubmission is already in flight or has already "
+                "completed; this failure belongs to a superseded run.",
+                mock_id, generation, state.mock_progress.get_generation(mock_id),
+            )
+            return
         del1_raw = (row.get("del1") if row else None) or {}
         del2_raw = (row.get("del2") if row else None) or {}
         state.result_store.save({

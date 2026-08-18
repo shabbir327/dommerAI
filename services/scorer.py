@@ -921,6 +921,23 @@ Returner KUN gyldig JSON:
         if not summary:
             summary = feedback
 
+        # The LLM writes feedback/examiner_summary referencing its own
+        # self-assigned model_grade, before the guardrail above ever runs.
+        # When the guardrail changes the delivered grade, that narrative
+        # text still cites the pre-guardrail number ("...resulting in a
+        # grade of 7") even though `overall` below is the guardrailed
+        # value (e.g. 2 or 4) — a direct contradiction the student would
+        # read. Rather than trying to regex-edit the model's prose (fragile
+        # across phrasings), append a short deterministic correction so the
+        # authoritative number is never in doubt.
+        if grade_adjustment is not None and model_grade != grade:
+            correction = (
+                f" (Note: the grade shown here has been adjusted to {grade} "
+                f"per grading guardrails — {grade_adjustment})"
+            )
+            feedback = (feedback + correction)[:2000]
+            summary = (summary + correction)[:1200]
+
         dimension_reasons = self._clean_dimension_reasons(raw.get("dimension_reasons"))
         strengths = self._clean_string_list(raw.get("strengths"), limit=4, max_length=300)
         improvements = self._clean_string_list(raw.get("improvements"), limit=4, max_length=300)
