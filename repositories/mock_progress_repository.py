@@ -70,11 +70,34 @@ class MockProgressStore:
                 "del1": None,
                 "del2": None,
                 "final_eval_id": None,
+                "generation": 0,
                 "created_at": now,
             }
         row = dict(row)
         row[part] = request_dict
         row["updated_at"] = now
+
+        # Bump the generation on every part submission — including a
+        # RESUBMISSION of a part that already arrived, or one arriving after
+        # the mock was already marked completed. grade_and_combine_mock is a
+        # background task that can take a while (up to four LLM calls); if a
+        # second submission triggers a second combine run before the first
+        # one finishes, both runs eventually call EvaluationResultStore.save
+        # under the same eval_id (=mock_id), and whichever happens to finish
+        # LAST wins — with no guarantee that's the logically-newer one. A
+        # slow, stale run (e.g. one that ultimately fails) could overwrite a
+        # newer, correct result purely on timing. The generation captured
+        # here lets grade_and_combine_mock detect, right before it saves,
+        # whether it has since been superseded — and skip the save instead
+        # of clobbering a newer result.
+        row["generation"] = int(row.get("generation") or 0) + 1
+
+        # A resubmission means this mock is being (re)graded — clear the
+        # completion marker so polling doesn't report "already completed"
+        # against what is now a stale/superseded combined result while the
+        # new grading run is in flight.
+        row["final_eval_id"] = None
+
         with self._lock:
             self._items[mock_id] = row
 
@@ -87,6 +110,7 @@ class MockProgressStore:
                         "del1": row.get("del1"),
                         "del2": row.get("del2"),
                         "final_eval_id": row.get("final_eval_id"),
+                        "generation": row.get("generation"),
                         "updated_at": now,
                     },
                     on_conflict="mock_id",
@@ -97,6 +121,14 @@ class MockProgressStore:
                     mock_id, exc,
                 )
         return row
+
+    def get_generation(self, mock_id: str) -> int:
+        """Current generation for this mock_id, or 0 if it doesn't exist yet.
+        Called by grade_and_combine_mock right before saving its result, to
+        detect whether a newer resubmission has superseded this run.
+        """
+        row = self.get(mock_id)
+        return int((row or {}).get("generation") or 0)
 
     def _load_from_supabase(self, mock_id: str) -> dict[str, Any] | None:
         if not self.persist_enabled or self.client is None:
