@@ -33,7 +33,7 @@ EVALUATE_EXAMPLES = {
             "(submission_mode can be omitted)."
         ),
         "value": {
-            "eval_id": "pd2-official-04",
+            "eval_id": "pd2-single-nov22-g04",
             "exam_type": "PD2",
             "question": "DEL 1 (B: En klage): Situation: Du bor i en lejlighed i boligforeningen Lysbo. Du har en nabo, som larmer meget. Du vil skrive en klage over din nabo til boligforeningen. Opgave: Skriv klagen til boligforeningen Lysbo. Du skal fortælle: hvem din nabo er, og hvor din nabo bor; hvordan og hvor tit din nabo larmer; hvad du har gjort for at løse problemet; hvad du håber, boligforeningen vil gøre. Du skal begynde og afslutte klagen på en passende måde.\n\nDEL 2 (En e-mail): Situation: Du har fået en e-mail fra din ven Emma. I e-mailen skriver hun bl.a.: '...I din sidste e-mail skrev du, at du har fået et nyt arbejde. Tillykke med det! Men du skrev også, at arbejdet somme tider er hårdt og stressende. Det lyder ikke så godt. Skriv og fortæl om dit nye arbejde, og hvorfor det somme tider er hårdt og stressende...' Opgave: Skriv et svar til Emma og fortæl om dit nye arbejde, og hvorfor det somme tider er hårdt og stressende. Du skal skrive minimum 100 ord.",
             "question_description": "PD2 skriftlig del, to delprøver. Bedømmes holistisk efter 7-trins-skalaen (-3 til 12) på pragmatisk, diskursiv og lingvistisk færdighed, B1-niveau. Delprøve 2 er afgørende for den endelige karakter.",
@@ -50,10 +50,10 @@ EVALUATE_EXAMPLES = {
             "grading."
         ),
         "value": {
-            "eval_id": "pd3-official-04-del1",
+            "eval_id": "pd3-mock-nov15-g04-del1",
             "exam_type": "PD3",
             "submission_mode": "mock",
-            "mock_id": "pd3-official-04",
+            "mock_id": "pd3-mock-nov15-g04",
             "delprove_part": "del1",
             "question": "Situation: Du har fået en mail fra en dansk ven, som skriver om Mihai fra Rumænien. Mailen (uddrag): '...Tak for sidst, det var hyggeligt. Hvad med den jobsamtale, du skulle til i går – tror du, du får jobbet? Kan du huske min ven Mihai? Han er blevet færdig med første del af sin uddannelse og vil måske tage anden del i Danmark. Han har spurgt mig, hvordan det er at komme til Danmark som udlænding. Men det har jeg jo ikke prøvet, så måske kan du hjælpe. Han spørger for eksempel, hvad det er vigtigt at gøre som noget af det første, når man lige er flyttet til Danmark. Han vil også gerne vide, hvad han kan gøre for at få venner her. Og så er han også lidt bekymret for vejret – tror du, han kan vænne sig til det?...' Opgave: Skriv et svar. Tak for mailen. Kom ind på de understregede dele i mailen. Foreslå, at Mihai kontakter dig.",
             "answer": "Hej Erik,\nTak for din e-mail. Jeg har det godt, hvad med dig?\nMin jobsamtale gik godt, tak. Men jeg er ikke færdig med min jobsamtale! Jeg har stadig et møde med den chef næste uge. Det var fire ansøgere til jobsamtalen og intervieweren var tilfreds med mig, så jeg håber, at jeg får jobbet.\nDesværre kan jeg ikke huske din ven Mihai, fordi du har så mange venner! Jeg synes, det er godt at have en uddannelse i Danmark, hvis Mihai har en mulighed at komme her. I dag, er det meget vigtigt at have en international erfaring som en elev.\nDa jeg kom til Danmark for 5 år siden, var det en ny erfaring for mig fordi jeg har aldrig været ud fra XX. Det var lidt anderledes at bo blandt så få mennesker!\nNår Mihai kommer til Danmark, er det meget vigtigt at han anmelder sig selv til sin kommune. Kommunen vil hjælpe ham, at få et CPR nummer. Uden CPR nummeret, er det næsten umugligt at åbne en bank konto.\nJeg kan godt forstå, at Mihai bekymrer sig over, om han vil få venner her i Danmark. Det er meget svært at få venner når vi er voksen. Jeg er indadvendt, så jeg bekymrer mig ikke over venner i Danmark. Jeg anbefaler, at han melder sig ind i en idrætsklub. I klubben, har han muglighed at møde folk fra forskellige lander og også fra Danmark. Hvad synes du om det?\nJeg ved ikke, hvordan vejret er i Rumænien. Men jeg synes ikke at vejret vil være et problem for ham. Han skal kun være parat til regnvejret og blæsevejret på det samme dag!\nJeg anbefaler, at Mihai skriver til mig. Jeg er sikker på, at han har flere spørgsmål, og det er nemmere når han skriver direkt til mig. Du kan give ham mit telefonnummer.\nMange hilsner\nNN",
@@ -69,10 +69,10 @@ EVALUATE_EXAMPLES = {
             "status moves past 'pending'."
         ),
         "value": {
-            "eval_id": "pd3-official-04-del2",
+            "eval_id": "pd3-mock-nov15-g04-del2",
             "exam_type": "PD3",
             "submission_mode": "mock",
-            "mock_id": "pd3-official-04",
+            "mock_id": "pd3-mock-nov15-g04",
             "delprove_part": "del2",
             "question": "DEL 2 (Skriftlig fremstilling om et alment og samfundsmæssigt emne, punkt A): Der vises et diagram om salget af økologiske fødevarer i danske butikker 2007-2011 (stigning fra 3,6 til 5,5 mia. kr.). Beskriv kort, hvad diagrammet viser (punkt 1). Forklar mulige årsager til udviklingen (punkt 2). Udtryk og argumenter for din holdning til fordele og ulemper ved økologiske fødevarer (punkt 3).",
             "answer": "Et diagram fra Landbrugsavisen.dk viser salget af økologiske fødevarer i danske butikker i milliarder kroner. Diagrammet viser at salget er steget fra 3,6 milliarder kroner til 5,5 milliarder kroner i 4 år (mellem 2007 og 2011).\nI dag, vider folk mere om økologiske fødevarer end før, på grund af medier og reklamer, der taler ofte om det. Næsten alle folk ved at kemikalier er usund, så salget af almindelige fødvarer taber. Vi tjener også mere penge i dag, så vi er ikke nødt til at tænke meget, om hvordan vi tilbringer vores penge. Man læser også i avisen, at kemikalier, som vi bruger at dyrke almindelige fødvarer påvirker jorden. Så folk foretrækker at købe økologiske fødevarer.\nFordeler med økologiske fødevarer er at det er sund, fordi det har ingen, eller mindre kemikalier. Med sund mad, reducerer vi mulighed for sygdomme som kræft. En anden fordel er, at når vi dyrker uden kemikalier, være jorden også sund og vandet fra kilder er også ren.\nUlemper med økologiske fødevarer er, at det er meget dyrt end almindelige fødevarer. Det er fordi uden kemikalier, kan de ikke dyrke så meget som almindelige fødevarer. Så landsmanden har mere omkostninger.\nEn anden ulempe er at økologiske fødevarer modner hurtige. Så vi kan ikke købe meget og holde i køleskabet for lange tid. Endelige, jeg tror ikke at vi får alle slags fødevarer som økologiske fødevarer.\nPå trods af så mange ulemper, jeg synes, at økologiske fødevarer er et godt valg. Hvis vi får et tilskud for at købe økologiske fødevarer, jeg synes, flere mennesker vil købe det.",
@@ -91,10 +91,10 @@ EVALUATE_EXAMPLES = {
             "unlike PD3 where Del 1 is always an e-mail."
         ),
         "value": {
-            "eval_id": "pd2-official-02-del1",
+            "eval_id": "pd2-mock-maj21-g02-del1",
             "exam_type": "PD2",
             "submission_mode": "mock",
-            "mock_id": "pd2-official-02",
+            "mock_id": "pd2-mock-maj21-g02",
             "delprove_part": "del1",
             "question": "A: En invitation. Situation: Du vil gerne invitere dine venner på restaurant. Du vil skrive en invitation. Opgave: Skriv invitationen. Du skal fortælle: hvorfor du gerne vil invitere dine venner på restaurant; hvor og hvornår I skal mødes (sted, dato og tidspunkt); lidt om restauranten og den mad, I skal have; hvad I skal lave, efter at I har spist. Du skal begynde og afslutte invitationen på en passende måde.",
             "question_description": "PD2 skriftlig del, delprøve 1 (maj-juni 2021 prøvegrundlag). Bedømmes sammen med delprøve 2 efter 7-trins-skalaen (-3 til 12), B1-niveau.",
@@ -111,10 +111,10 @@ EVALUATE_EXAMPLES = {
             "final result once status moves past 'pending'."
         ),
         "value": {
-            "eval_id": "pd2-official-02-del2",
+            "eval_id": "pd2-mock-maj21-g02-del2",
             "exam_type": "PD2",
             "submission_mode": "mock",
-            "mock_id": "pd2-official-02",
+            "mock_id": "pd2-mock-maj21-g02",
             "delprove_part": "del2",
             "question": "En e-mail. Situation: Du har fået en e-mail fra din danske ven Adam. I e-mailen skriver han bl.a.: '...Nu har du jo boet i Danmark i et stykke tid. Hvordan er det at bo i Danmark? Og hvordan har du fundet nye venner her?' Opgave: Skriv et svar til Adam og fortæl, hvordan det er at bo i Danmark, og hvordan du har fundet nye venner her. Du skal skrive minimum 100 ord.",
             "question_description": "PD2 skriftlig del, delprøve 2 (maj-juni 2021 prøvegrundlag). Delprøve 2 er afgørende for den endelige karakter.",
@@ -132,10 +132,10 @@ EVALUATE_EXAMPLES = {
             "mock_id to trigger grading."
         ),
         "value": {
-            "eval_id": "pd3-official-02-del1",
+            "eval_id": "pd3-mock-maj22-g02-del1",
             "exam_type": "PD3",
             "submission_mode": "mock",
-            "mock_id": "pd3-official-02",
+            "mock_id": "pd3-mock-maj22-g02",
             "delprove_part": "del1",
             "question": "Situation: Du har fået en mail fra din danske ven Mia. Hun har været udstationeret i New York i tre år for et dansk firma, og nu skal hun snart hjem til Odense sammen med sin familie. Mailen (uddrag): '...Tak for snakken i sidste uge, det var hyggeligt at tale med dig på Skype. Jeg er meget spændt på at høre om din køreprøve. Hvordan gik det? Som du ved, er vores tid i New York snart slut, og vi skal hjem til Odense om tre uger. Jeg skal arbejde sammen med nogle kolleger, jeg ikke kender. Hvad synes du, jeg skal gøre for at få en god start på arbejdet? Børnene er jo blevet teenagere, og de er meget kede af at sige farvel til deres venner her i New York. Jeg er spændt på, om de kan holde kontakten. Tror du, det er muligt? Jens har fået nyt arbejde i Danmark, som han glæder sig til at komme i gang med efter 3 år som hjemmegående. Det nye job ligger dog 30 km fra Odense, så vi overvejer at købe en ekstra bil, men han kan også tage toget. Hvad ville du gøre?' Opgave: Skriv et svar til din ven. Tak for mailen. Kom ind på de understregede dele i mailen. Foreslå, at I mødes, når Mia kommer hjem.",
             "question_description": "PD3 skriftlig del, delprøve 1 (sommerprøven 2022 prøvegrundlag). Bedømmes sammen med delprøve 2 efter 7-trins-skalaen (-3 til 12), B2-niveau.",
@@ -152,10 +152,10 @@ EVALUATE_EXAMPLES = {
             "moves past 'pending'."
         ),
         "value": {
-            "eval_id": "pd3-official-02-del2",
+            "eval_id": "pd3-mock-maj22-g02-del2",
             "exam_type": "PD3",
             "submission_mode": "mock",
-            "mock_id": "pd3-official-02",
+            "mock_id": "pd3-mock-maj22-g02",
             "delprove_part": "del2",
             "question": "2B: En attraktiv arbejdsplads. Der er forskellige faktorer, der kan have betydning for, hvor attraktiv en arbejdsplads er for medarbejderne. Eksempler: Godt samarbejde mellem kolleger; Fleksible arbejdstider; Indflydelse på egne arbejdsopgaver; God løn; Mulighed for efteruddannelse; Personalegoder. Opgave: Fortæl kort om en attraktiv arbejdsplads, du har været på eller har hørt om. Kommentér en eller to af faktorerne fra listen. Vurdér, om det er lederens personlige kvalifikationer eller faglige kvalifikationer, der er vigtigst for, om en arbejdsplads er attraktiv (dette punkt skal udgøre ca. 50% af den samlede besvarelse). Du skal skrive minimum 200 ord.",
             "question_description": "PD3 skriftlig del, delprøve 2B (sommerprøven 2022 prøvegrundlag). Delprøve 2 er afgørende for den endelige karakter, især punkt 3 (ca. 50% af besvarelsen), hvor B2-niveauet afprøves.",
@@ -218,7 +218,7 @@ async def evaluate(
         # off the real grading in the background.
         if state.mock_progress is None:
             raise HTTPException(status_code=503, detail="Mock progress store is not ready.")
-        ready = await store_mock_part(request)
+        ready, generation = await store_mock_part(request)
         if not ready:
             return AckResponse(
                 eval_id=request.eval_id,
@@ -226,7 +226,9 @@ async def evaluate(
                 webhook_url_used=effective_webhook,
                 webhook_source=webhook_source,
             )
-        background_tasks.add_task(grade_and_combine_mock, request.mock_id, effective_webhook)
+        background_tasks.add_task(
+            grade_and_combine_mock, request.mock_id, effective_webhook, generation
+        )
         return AckResponse(
             eval_id=request.mock_id,
             status="pending",
