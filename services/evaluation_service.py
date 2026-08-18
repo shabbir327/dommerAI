@@ -98,14 +98,14 @@ async def grade_and_combine_mock(mock_id: str, webhook_url: str | None) -> None:
         del1_feedback = (del1_payload.feedback or "").strip() if del1_payload else ""
         del2_feedback = (del2_payload.feedback or "").strip() if del2_payload else ""
         if del1_feedback and del2_feedback:
-            combined_feedback = f"Del 1 (e-mail): {del1_feedback} Del 2 (skriftlig fremstilling): {del2_feedback}"
+            combined_feedback = f"Del 1: {del1_feedback} Del 2: {del2_feedback}"
         else:
             combined_feedback = del2_feedback or del1_feedback or None
 
         del1_summary = (del1_payload.examiner_summary or "").strip() if del1_payload else ""
         del2_summary = (del2_payload.examiner_summary or "").strip() if del2_payload else ""
         if del1_summary and del2_summary:
-            narrative_summary = f"Del 1 (e-mail): {del1_summary} Del 2 (skriftlig fremstilling): {del2_summary}"
+            narrative_summary = f"Del 1: {del1_summary} Del 2: {del2_summary}"
         else:
             narrative_summary = del2_summary or del1_summary or combined["combination_reason"]
 
