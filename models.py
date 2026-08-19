@@ -8,7 +8,7 @@ ExamLevel = Literal["PD2", "PD3"]
 RubricLevel = Literal["Top", "Midt", "Bund", "Under niveau"]
 Grade = Literal[12, 10, 7, 4, 2, 0, -3]
 PassFail = Literal["PASSED", "NOT PASSED"]
-SubmissionStatus = Literal["pending", "scored", "failed", "awaiting_other_part"]
+SubmissionStatus = Literal["pending", "scored", "failed", "awaiting_other_part", "preview"]
 WebhookSource = Literal["request", "environment", "none"]
 # "single" — existing behaviour, one question/answer graded on the full -3..12
 #   scale. Every test run so far (PD2/PD3 test suites, ground-truth checks).
