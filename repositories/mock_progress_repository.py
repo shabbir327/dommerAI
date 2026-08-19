@@ -74,15 +74,36 @@ class MockProgressStore:
                 "created_at": now,
             }
         row = dict(row)
-        # Each part is stored as {"request": ..., "graded": ..., "graded_generation": ...}
-        # rather than the raw request dict directly. This lets a part's
-        # LLM-graded result be cached alongside its submission (populated by
-        # save_graded_preview once grading finishes) without needing a new
-        # SQL column — del1/del2 are already jsonb, so this is just a richer
-        # shape inside the same column. A (re)submission always resets
-        # "graded" to None: any previously-cached grading for this part is
-        # now stale and must not be reused by grade_and_combine_mock.
-        row[part] = {"request": request_dict, "graded": None, "graded_generation": None}
+        # Each part is stored as {"request": ..., "graded": ..., "version": ...,
+        # "graded_for_version": ...} rather than the raw request dict
+        # directly. This lets a part's LLM-graded result be cached alongside
+        # its submission (populated by save_graded_preview once grading
+        # finishes) without needing a new SQL column — del1/del2 are already
+        # jsonb, so this is just a richer shape inside the same column.
+        #
+        # "version" is a PER-PART counter, deliberately separate from the
+        # mock-wide "generation" below. They answer different questions:
+        #   - "generation" (mock-wide): has ANY new submission started for
+        #     this mock_id since I began — used by grade_and_combine_mock's
+        #     final-save guard, because that's about not overwriting a
+        #     newer COMBINED result with a stale one.
+        #   - "version" (per-part): has THIS SPECIFIC part been resubmitted
+        #     since it was graded — used to decide whether a part's cached
+        #     grading is still safe to reuse.
+        # Using one shared counter for both was the original (buggy) design:
+        # Del1 arriving bumped generation to 1 and cached Del1's grading
+        # against it; Del2 arriving right after bumped generation to 2 —
+        # which invalidated Del1's still-perfectly-good cached grading for
+        # a reason that had nothing to do with Del1 being resubmitted, so
+        # Del1 got scored a second time from scratch. Two independent
+        # counters fix that: Del2 arriving no longer touches Del1's version.
+        prior_part = row.get(part) or {}
+        row[part] = {
+            "request": request_dict,
+            "graded": None,
+            "graded_for_version": None,
+            "version": int(prior_part.get("version") or 0) + 1,
+        }
         row["updated_at"] = now
 
         # Bump the generation on every part submission — including a
@@ -139,7 +160,7 @@ class MockProgressStore:
         return int((row or {}).get("generation") or 0)
 
     def save_graded_preview(
-        self, mock_id: str, part: str, graded_dict: dict[str, Any], generation: int
+        self, mock_id: str, part: str, graded_dict: dict[str, Any], part_version: int
     ) -> bool:
         """Caches a part's LLM-graded result once its standalone preview
         grading finishes, so grade_and_combine_mock can reuse it later
@@ -147,10 +168,18 @@ class MockProgressStore:
         arrives — avoiding double LLM spend on the part that was graded
         early for the student-facing preview.
 
+        `part_version` is the PER-PART version captured by the caller when
+        this grading run started (row[part]["version"] at that time) — NOT
+        the mock-wide generation counter. Using the mock-wide counter here
+        was the original bug: it bumps when EITHER part is submitted, so
+        Del2 arriving would invalidate Del1's already-cached grading even
+        though Del1 itself was never resubmitted. Comparing against this
+        part's own version means only an actual resubmission of THIS part
+        invalidates its cache — the other part arriving is irrelevant.
+
         Returns False (and does not save) if this part has been resubmitted
-        since `generation` was captured — same staleness guard used for the
-        final combination, for the same reason: a slow preview-grading run
-        must not overwrite a newer resubmission's in-progress state.
+        since `part_version` was captured — a slow preview-grading run must
+        not overwrite a newer resubmission's in-progress state.
         """
         with self._lock:
             row = self._items.get(mock_id)
@@ -158,14 +187,14 @@ class MockProgressStore:
             row = self._load_from_supabase(mock_id)
         if row is None or row.get(part) is None:
             return False
-        if int(row.get("generation") or 0) != generation:
+        if int(row[part].get("version") or 0) != part_version:
             return False
 
         now = _now_cph().isoformat()
         row = dict(row)
         row[part] = dict(row[part])
         row[part]["graded"] = graded_dict
-        row[part]["graded_generation"] = generation
+        row[part]["graded_for_version"] = part_version
         row["updated_at"] = now
         with self._lock:
             self._items[mock_id] = row
