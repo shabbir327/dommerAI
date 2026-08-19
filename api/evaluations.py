@@ -219,7 +219,7 @@ async def evaluate(
         # off the real grading in the background.
         if state.mock_progress is None:
             raise HTTPException(status_code=503, detail="Mock progress store is not ready.")
-        ready, generation = await store_mock_part(request)
+        ready, generation, part_version = await store_mock_part(request)
         if not ready:
             # This half is now graded on its own in the background — the
             # student gets qualitative feedback (rubric levels, errors,
@@ -228,8 +228,10 @@ async def evaluate(
             # waiting for the pair. Deliberately no number yet: see
             # grade_single_part_preview's docstring for why a single
             # delprøve has no independent grade under the official rubric.
+            # part_version (not the mock-wide generation) is what guards
+            # this specific part's cache — see store_mock_part's docstring.
             background_tasks.add_task(
-                grade_single_part_preview, request.mock_id, request.delprove_part, generation
+                grade_single_part_preview, request.mock_id, request.delprove_part, part_version
             )
             return AckResponse(
                 eval_id=request.eval_id,
