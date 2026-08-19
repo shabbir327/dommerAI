@@ -16,6 +16,7 @@ from models import (
 )
 from services.evaluation_service import (
     grade_and_combine_mock,
+    grade_single_part_preview,
     score_store_and_notify,
     store_mock_part,
 )
@@ -220,6 +221,16 @@ async def evaluate(
             raise HTTPException(status_code=503, detail="Mock progress store is not ready.")
         ready, generation = await store_mock_part(request)
         if not ready:
+            # This half is now graded on its own in the background — the
+            # student gets qualitative feedback (rubric levels, errors,
+            # strengths/improvements) right away by polling
+            # GET /evaluation/{eval_id} for THIS part's own eval_id, without
+            # waiting for the pair. Deliberately no number yet: see
+            # grade_single_part_preview's docstring for why a single
+            # delprøve has no independent grade under the official rubric.
+            background_tasks.add_task(
+                grade_single_part_preview, request.mock_id, request.delprove_part, generation
+            )
             return AckResponse(
                 eval_id=request.eval_id,
                 status="awaiting_other_part",
