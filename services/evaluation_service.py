@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 import httpx
 
@@ -40,6 +41,72 @@ async def store_mock_part(request: EvaluationRequest) -> tuple[bool, int]:
     return ready, generation
 
 
+async def grade_single_part_preview(mock_id: str, part: str, generation: int) -> None:
+    """Background task fired immediately when a mock's FIRST half arrives
+    (whichever one that is), so the student gets feedback right away instead
+    of waiting for the pair. Grades that part on its own and exposes its
+    qualitative feedback (rubric levels, errors, strengths/improvements) —
+    but deliberately NOT a numeric grade or pass/fail.
+
+    Why no number: per the official PD2/PD3 bedømmelsesvejledninger, a
+    single delprøve has no independent grade of its own. A Del1-only mock
+    can only ever resolve to 00 or -3 (and only once Del2 turns out to be
+    genuinely missing); a Del2-only mock gets an automatic one-step
+    deduction from its own grade. Showing a number for one isolated half
+    would either be meaningless in isolation or get contradicted the moment
+    the holistic grade is computed once the pair arrives — showing two
+    different numbers for the same mock is worse than showing one, later.
+
+    The full graded payload (with its real internal grade) IS cached on the
+    mock_progress row via save_graded_preview, so grade_and_combine_mock can
+    reuse it once the pair arrives instead of re-scoring this same part a
+    second time — this preview does not double the eventual per-mock LLM
+    cost, it just moves half of it earlier.
+    """
+    if state.mock_progress is None or state.scorer is None or state.result_store is None:
+        logger.error("Preview grading dependencies not ready — mock_id=%s", mock_id)
+        return
+
+    row = state.mock_progress.get(mock_id)
+    if row is None or row.get(part) is None:
+        logger.error("Preview grading: row/part vanished — mock_id=%s part=%s", mock_id, part)
+        return
+
+    try:
+        request_dict = row[part]["request"]
+        payload = await state.scorer.score(EvaluationRequest.model_validate(request_dict))
+    except Exception as exc:
+        logger.exception("Del %s preview grading failed — mock_id=%s", part, mock_id)
+        return
+
+    graded_dict = payload.model_dump(mode="json", exclude_none=True)
+    saved = state.mock_progress.save_graded_preview(mock_id, part, graded_dict, generation)
+    if not saved:
+        logger.warning(
+            "Discarding superseded %s preview — mock_id=%s generation=%s",
+            part, mock_id, generation,
+        )
+        return
+
+    # The cached copy above keeps the real overall/pass_fail for
+    # grade_and_combine_mock to reuse later. This is a SEPARATE, scrubbed
+    # copy for the student-facing record — no grade, clearly labelled.
+    preview_dict = dict(graded_dict)
+    preview_dict["overall"] = None
+    preview_dict["pass_fail"] = None
+    preview_dict["status"] = "preview"
+    preview_dict["eval_id"] = request_dict.get("eval_id") or f"{mock_id}-{part}"
+    other_part = "del2" if part == "del1" else "del1"
+    note = (
+        f"This is Del {part[-1]} feedback only — no grade is shown yet. "
+        f"Submit Del {other_part[-1]} to see your holistic grade for this mock."
+    )
+    preview_dict["examiner_summary"] = (
+        (str(preview_dict.get("examiner_summary") or "").strip() + " ").lstrip() + note
+    ).strip()
+    state.result_store.save(preview_dict)
+
+
 async def grade_and_combine_mock(
     mock_id: str, webhook_url: str | None, generation: int | None = None
 ) -> None:
@@ -48,8 +115,9 @@ async def grade_and_combine_mock(
     lingvistisk read, since an email and a formal essay have genuinely
     different register expectations), then combines them deterministically
     via Scorer.combine_mock_grades — never asks an LLM to do that arithmetic.
-    An abandoned single-part mock never reaches this function at all: no
-    LLM calls are spent on it, by design.
+    An abandoned single-part mock reaches grade_single_part_preview above
+    (one part graded, no number shown) but never this function — the second
+    part's LLM calls are still never spent on an abandoned mock, by design.
 
     `generation` is the mock_progress generation counter captured by the
     caller at the moment THIS run was triggered. Since this involves up to
@@ -73,18 +141,46 @@ async def grade_and_combine_mock(
             logger.error("Mock progress row vanished — mock_id=%s", mock_id)
             return
 
-        del1_payload = None
-        if row.get("del1") is not None:
-            del1_payload = await state.scorer.score(EvaluationRequest.model_validate(row["del1"]))
+        # Del 1 and Del 2 are graded independently (own pragmatisk/diskursiv/
+        # lingvistisk read each), so there's no reason to make Del 2 wait
+        # for Del 1 to finish before its own LLM calls even start. Firing
+        # both concurrently roughly halves the wall-clock time for this step
+        # — it does NOT change how many LLM calls get made, only latency.
+        # score() never raises — it catches its own failures internally and
+        # returns a WebhookPayload with status="failed" — so gathering both
+        # concurrently here is safe without needing return_exceptions
+        # handling.
+        #
+        # If a part was already graded for its standalone preview (see
+        # grade_single_part_preview) AND that cached grading is still fresh
+        # (its graded_generation matches the mock's CURRENT generation — i.e.
+        # this part hasn't been resubmitted since), reuse it instead of
+        # scoring it a second time. This is what keeps the preview feature
+        # from doubling the eventual per-mock LLM cost.
+        current_generation = int(row.get("generation") or 0)
+        tasks: dict[str, Any] = {}
+        cached_payloads: dict[str, WebhookPayload] = {}
+        for part in ("del1", "del2"):
+            part_data = row.get(part)
+            if part_data is None:
+                continue
+            cached = part_data.get("graded")
+            cached_gen = part_data.get("graded_generation")
+            if cached is not None and cached_gen == current_generation:
+                cached_payloads[part] = WebhookPayload.model_validate(cached)
+            else:
+                tasks[part] = state.scorer.score(EvaluationRequest.model_validate(part_data["request"]))
 
-        del2_payload = None
-        if row.get("del2") is not None:
-            del2_payload = await state.scorer.score(EvaluationRequest.model_validate(row["del2"]))
+        results = await asyncio.gather(*tasks.values()) if tasks else []
+        graded = dict(zip(tasks.keys(), results))
+        graded.update(cached_payloads)
+        del1_payload = graded.get("del1")
+        del2_payload = graded.get("del2")
 
         combined = state.scorer.combine_mock_grades(del1_payload, del2_payload)
 
-        del1_raw = row.get("del1") or {}
-        del2_raw = row.get("del2") or {}
+        del1_raw = (row.get("del1") or {}).get("request") or {}
+        del2_raw = (row.get("del2") or {}).get("request") or {}
 
         def _combine_field(field: str, fallback: str | None = "(not answered)") -> str | None:
             # evaluations.question/answer are NOT NULL — a combined mock
@@ -184,8 +280,8 @@ async def grade_and_combine_mock(
                 mock_id, generation, state.mock_progress.get_generation(mock_id),
             )
             return
-        del1_raw = (row.get("del1") if row else None) or {}
-        del2_raw = (row.get("del2") if row else None) or {}
+        del1_raw = ((row.get("del1") if row else None) or {}).get("request") or {}
+        del2_raw = ((row.get("del2") if row else None) or {}).get("request") or {}
         state.result_store.save({
             "eval_id": mock_id,
             "status": "failed",
