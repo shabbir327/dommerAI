@@ -14,17 +14,24 @@ from models import EvaluationRequest, WebhookPayload
 logger = logging.getLogger("dommer.evaluation")
 
 
-async def store_mock_part(request: EvaluationRequest) -> tuple[bool, int]:
+async def store_mock_part(request: EvaluationRequest) -> tuple[bool, int, int]:
     """Synchronous, no LLM calls — just persists this half and reports
     whether its pair has already arrived. Kept separate from the actual
     grading so the API layer can return its 202 ack immediately either way,
     same as the existing single-submission flow, instead of blocking the
     request on up to four LLM calls when this happens to be the second half.
 
-    Returns (ready, generation) — generation is the mock_progress
-    generation counter immediately after this save, which the caller must
-    pass through to grade_and_combine_mock so it can detect, right before
-    saving its result, whether a later resubmission has since superseded it.
+    Returns (ready, generation, part_version):
+      - generation: the mock-WIDE counter, bumped by ANY part's submission.
+        Passed to grade_and_combine_mock, which re-checks it right before
+        saving the combined result — detects whether a later resubmission
+        (of either part) has superseded this whole combine run.
+      - part_version: the counter for THIS specific part only, bumped only
+        when THIS part is (re)submitted. Passed to grade_single_part_preview,
+        which re-checks it right before caching this part's graded result —
+        detects whether THIS part specifically has been resubmitted since
+        grading started. Deliberately separate from `generation`: the other
+        part arriving must not invalidate this part's cached grading.
     """
     if state.mock_progress is None:
         raise RuntimeError("Mock progress store is not initialised.")
@@ -38,10 +45,11 @@ async def store_mock_part(request: EvaluationRequest) -> tuple[bool, int]:
     other_part = "del2" if request.delprove_part == "del1" else "del1"
     ready = row.get(other_part) is not None
     generation = int(row.get("generation") or 0)
-    return ready, generation
+    part_version = int(row[request.delprove_part]["version"])
+    return ready, generation, part_version
 
 
-async def grade_single_part_preview(mock_id: str, part: str, generation: int) -> None:
+async def grade_single_part_preview(mock_id: str, part: str, part_version: int) -> None:
     """Background task fired immediately when a mock's FIRST half arrives
     (whichever one that is), so the student gets feedback right away instead
     of waiting for the pair. Grades that part on its own and exposes its
@@ -62,6 +70,10 @@ async def grade_single_part_preview(mock_id: str, part: str, generation: int) ->
     reuse it once the pair arrives instead of re-scoring this same part a
     second time — this preview does not double the eventual per-mock LLM
     cost, it just moves half of it earlier.
+
+    `part_version` is THIS part's own version counter (captured by the
+    caller from store_mock_part), NOT the mock-wide generation — see
+    save_graded_preview's docstring for why that distinction matters.
     """
     if state.mock_progress is None or state.scorer is None or state.result_store is None:
         logger.error("Preview grading dependencies not ready — mock_id=%s", mock_id)
@@ -80,11 +92,11 @@ async def grade_single_part_preview(mock_id: str, part: str, generation: int) ->
         return
 
     graded_dict = payload.model_dump(mode="json", exclude_none=True)
-    saved = state.mock_progress.save_graded_preview(mock_id, part, graded_dict, generation)
+    saved = state.mock_progress.save_graded_preview(mock_id, part, graded_dict, part_version)
     if not saved:
         logger.warning(
-            "Discarding superseded %s preview — mock_id=%s generation=%s",
-            part, mock_id, generation,
+            "Discarding superseded %s preview — mock_id=%s part_version=%s",
+            part, mock_id, part_version,
         )
         return
 
@@ -95,6 +107,7 @@ async def grade_single_part_preview(mock_id: str, part: str, generation: int) ->
     preview_dict["overall"] = None
     preview_dict["pass_fail"] = None
     preview_dict["status"] = "preview"
+    preview_dict["submission_mode"] = "mock"
     preview_dict["eval_id"] = request_dict.get("eval_id") or f"{mock_id}-{part}"
     other_part = "del2" if part == "del1" else "del1"
     note = (
@@ -153,11 +166,14 @@ async def grade_and_combine_mock(
         #
         # If a part was already graded for its standalone preview (see
         # grade_single_part_preview) AND that cached grading is still fresh
-        # (its graded_generation matches the mock's CURRENT generation — i.e.
-        # this part hasn't been resubmitted since), reuse it instead of
-        # scoring it a second time. This is what keeps the preview feature
-        # from doubling the eventual per-mock LLM cost.
-        current_generation = int(row.get("generation") or 0)
+        # for THIS part's own version (i.e. this part hasn't been
+        # resubmitted since it was graded), reuse it instead of scoring it
+        # a second time. This is what keeps the preview feature from
+        # doubling the eventual per-mock LLM cost. Deliberately checks each
+        # part's OWN "version" against its OWN "graded_for_version" — not
+        # the mock-wide "generation" — because the other part arriving
+        # bumps "generation" too, and must NOT invalidate this part's
+        # already-good cached grading (that was the original bug here).
         tasks: dict[str, Any] = {}
         cached_payloads: dict[str, WebhookPayload] = {}
         for part in ("del1", "del2"):
@@ -165,8 +181,7 @@ async def grade_and_combine_mock(
             if part_data is None:
                 continue
             cached = part_data.get("graded")
-            cached_gen = part_data.get("graded_generation")
-            if cached is not None and cached_gen == current_generation:
+            if cached is not None and part_data.get("graded_for_version") == part_data.get("version"):
                 cached_payloads[part] = WebhookPayload.model_validate(cached)
             else:
                 tasks[part] = state.scorer.score(EvaluationRequest.model_validate(part_data["request"]))
