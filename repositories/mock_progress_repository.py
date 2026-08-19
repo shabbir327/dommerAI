@@ -74,7 +74,15 @@ class MockProgressStore:
                 "created_at": now,
             }
         row = dict(row)
-        row[part] = request_dict
+        # Each part is stored as {"request": ..., "graded": ..., "graded_generation": ...}
+        # rather than the raw request dict directly. This lets a part's
+        # LLM-graded result be cached alongside its submission (populated by
+        # save_graded_preview once grading finishes) without needing a new
+        # SQL column — del1/del2 are already jsonb, so this is just a richer
+        # shape inside the same column. A (re)submission always resets
+        # "graded" to None: any previously-cached grading for this part is
+        # now stale and must not be reused by grade_and_combine_mock.
+        row[part] = {"request": request_dict, "graded": None, "graded_generation": None}
         row["updated_at"] = now
 
         # Bump the generation on every part submission — including a
@@ -129,6 +137,60 @@ class MockProgressStore:
         """
         row = self.get(mock_id)
         return int((row or {}).get("generation") or 0)
+
+    def save_graded_preview(
+        self, mock_id: str, part: str, graded_dict: dict[str, Any], generation: int
+    ) -> bool:
+        """Caches a part's LLM-graded result once its standalone preview
+        grading finishes, so grade_and_combine_mock can reuse it later
+        instead of re-scoring that same part a second time when its pair
+        arrives — avoiding double LLM spend on the part that was graded
+        early for the student-facing preview.
+
+        Returns False (and does not save) if this part has been resubmitted
+        since `generation` was captured — same staleness guard used for the
+        final combination, for the same reason: a slow preview-grading run
+        must not overwrite a newer resubmission's in-progress state.
+        """
+        with self._lock:
+            row = self._items.get(mock_id)
+        if row is None:
+            row = self._load_from_supabase(mock_id)
+        if row is None or row.get(part) is None:
+            return False
+        if int(row.get("generation") or 0) != generation:
+            return False
+
+        now = _now_cph().isoformat()
+        row = dict(row)
+        row[part] = dict(row[part])
+        row[part]["graded"] = graded_dict
+        row[part]["graded_generation"] = generation
+        row["updated_at"] = now
+        with self._lock:
+            self._items[mock_id] = row
+
+        if self.persist_enabled and self.client is not None:
+            try:
+                self.client.table(self.table).upsert(
+                    {
+                        "mock_id": mock_id,
+                        "exam_type": row.get("exam_type"),
+                        "del1": row.get("del1"),
+                        "del2": row.get("del2"),
+                        "final_eval_id": row.get("final_eval_id"),
+                        "generation": row.get("generation"),
+                        "updated_at": now,
+                    },
+                    on_conflict="mock_id",
+                ).execute()
+            except Exception as exc:
+                logger.exception(
+                    "Supabase mock_progress preview-cache persistence FAILED "
+                    "— mock_id=%s part=%s error=%s",
+                    mock_id, part, exc,
+                )
+        return True
 
     def _load_from_supabase(self, mock_id: str) -> dict[str, Any] | None:
         if not self.persist_enabled or self.client is None:
